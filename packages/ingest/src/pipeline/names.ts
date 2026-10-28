@@ -21,6 +21,32 @@ export function newNameCache(): NameCache {
   return new Map();
 }
 
+/**
+ * How many times each name appeared in THIS batch, flushed once at the end.
+ *
+ * The count cannot be incremented inside `resolveNameId`, because that is cached
+ * per batch: a batch of six events with one name incremented it once. The Inbox
+ * shows this number to the founder, and the AI prompt uses it to pick the top 60
+ * names by volume, so an undercount is a wrong screen AND a wrong prompt.
+ */
+export type NameCounts = Map<number, number>;
+
+export function countName(counts: NameCounts, nameId: number): void {
+  counts.set(nameId, (counts.get(nameId) ?? 0) + 1);
+}
+
+/** One statement per batch, like the other counters. */
+export async function flushNameCounts(db: ScopedDb, counts: NameCounts): Promise<void> {
+  if (counts.size === 0) return;
+  const ids = [...counts.keys()];
+  await db.exec(
+    `UPDATE event_names SET event_count = event_count + c.extra
+       FROM unnest($2::int[], $3::bigint[]) AS c(id, extra)
+      WHERE event_names.project_id = $1 AND event_names.id = c.id`,
+    [db.projectId, ids, ids.map((id) => counts.get(id) ?? 0)],
+  );
+}
+
 export async function resolveNameId(
   db: ScopedDb,
   cache: NameCache,
@@ -48,10 +74,9 @@ export async function resolveNameId(
 
   const row = await db.one<{ id: number; canonical: string | null }>(
     `INSERT INTO event_names (project_id, raw_name, canonical, status, confidence, first_seen_at, last_seen_at, event_count, owning_source)
-     VALUES ($1, $2, $3, $4, $5, $6, $6, 1, $7)
+     VALUES ($1, $2, $3, $4, $5, $6, $6, 0, $7)
      ON CONFLICT (project_id, raw_name) DO UPDATE SET
-       last_seen_at = GREATEST(event_names.last_seen_at, EXCLUDED.last_seen_at),
-       event_count  = event_names.event_count + 1
+       last_seen_at = GREATEST(event_names.last_seen_at, EXCLUDED.last_seen_at)
      RETURNING id, canonical`,
     [
       db.projectId,

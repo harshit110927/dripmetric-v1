@@ -21,13 +21,14 @@
     "typecheck": "tsc -b --pretty",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "pnpm --filter dripmetric test:e2e",
     "check:names": "node scripts/check-script-names.mjs",
+    "check:fixtures": "node scripts/check-fixtures.mjs",
     "check:licenses": "node scripts/check-licenses.mjs",
-    "verify": "pnpm check:names && pnpm lint && pnpm format:check && pnpm typecheck && pnpm check:licenses && pnpm test",
-    "ready": "pnpm format && pnpm verify",
     "sdk:build": "pnpm --filter dripmetric build",
     "sdk:size": "pnpm --filter dripmetric size",
-    "test:e2e": "pnpm --filter dripmetric test:e2e"
+    "verify": "pnpm check:names && pnpm check:fixtures && pnpm lint && pnpm format:check && pnpm typecheck && pnpm check:licenses && pnpm test",
+    "ready": "pnpm format && pnpm verify"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

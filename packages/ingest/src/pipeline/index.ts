@@ -11,7 +11,15 @@ import type { PreparedMessage } from '../types.js';
 import { isBot, visitorUserAgent } from '../enrich/user-agent.js';
 import { emailDomain, looksLikeEmail } from '../enrich/email.js';
 import { normalisePath } from '../enrich/paths.js';
-import { newNameCache, resolveNameId, resolvePathId, type NameCache } from './names.js';
+import {
+  countName,
+  flushNameCounts,
+  newNameCache,
+  resolveNameId,
+  resolvePathId,
+  type NameCache,
+  type NameCounts,
+} from './names.js';
 import {
   addAccountMember,
   applyTraits,
@@ -87,6 +95,8 @@ interface PendingEvent {
 
 export interface PipelineState {
   names: NameCache;
+  /** How many times each name appeared in this batch; flushed once at the end. */
+  nameCounts: NameCounts;
   paths: Map<string, number>;
   users: Map<string, ResolvedUser>;
   anons: Map<string, number>;
@@ -108,6 +118,7 @@ export interface PipelineState {
 export function newPipelineState(): PipelineState {
   return {
     names: newNameCache(),
+    nameCounts: new Map(),
     paths: new Map(),
     users: new Map(),
     anons: new Map(),
@@ -264,6 +275,8 @@ export async function prepareForWrite(
     CATALOG_EVENTS_BY_NAME.get(rawName)?.arrival === 'billing' ? 'billing' : project.source;
 
   const name = await resolveNameId(db, state.names, rawName, effectiveSource, prepared.occurredAt);
+  // Counted per occurrence, not per distinct name: resolveNameId is cached.
+  countName(state.nameCounts, name.id);
 
   // --- The page path -----------------------------------------------------------
   const resolvedPath = await resolvePath(db, message, state, prepared.occurredAt);
@@ -421,6 +434,8 @@ async function writeCounters(
   state: PipelineState,
   project: ProjectContext,
 ): Promise<void> {
+  await flushNameCounts(db, state.nameCounts);
+
   await recordMonthlyActive(
     db,
     [...state.monthlyActive].map((entry) => {

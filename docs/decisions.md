@@ -568,3 +568,108 @@ the dev environment provides for free — a pre-installed browser, a running Doc
 daemon, a populated `.env` — is a thing CI has to be told about explicitly. I cannot
 verify this particular fix locally either, because installing a second browser here
 would not be found by the pinned Playwright, so the CI run is the proof.
+
+---
+
+## M5 — Product model and event matching
+
+### 2026-10-28 · The scrubber checks patterns before length, and keys before both
+
+Three rules, in this order, each catching what the others cannot:
+
+1. **The property KEY.** `"name": "Pat"` matches no pattern — three letters, no digits,
+   no `@` — and is still somebody's name. Only the key gives it away.
+2. **The VALUE's shape.** A founder who puts an email in a `plan` property gets no
+   help from the key, so the patterns have to catch it.
+3. **Length and cardinality.** A sample is only useful when it is short and the
+   property has few distinct values: a plan name, a step label, a method. Anything
+   else is free text or an id.
+
+The patterns run _before_ the length limit, which does not change whether a value is
+dropped but does change the reason reported — and "looks like email" is a far better
+line in a log than "longer than 24 characters". It also keeps the patterns
+load-bearing if the length cap is ever raised. They are ordered most-specific first
+for the same reason: the loose `phone` shape otherwise claims card numbers and IP
+addresses, both of which it technically matches.
+
+`prefixed-id` takes an optional second segment (`[a-z]{2,8}(?:_[a-z]{2,8})?_…`),
+because `sk_live_…` and `pk_test_…` are the shapes most worth catching and a
+single-underscore pattern misses them — `\b` fails before `live_…` since the
+preceding `_` is a word character, so only the generic token rule caught them.
+
+There is deliberately no path that _transforms_ a value into a safe version. A
+partially redacted email is still an email leaving the building.
+
+### 2026-10-28 · The model is reached through an injected function, not an SDK
+
+`suggestMappings(input, ask)` takes a one-call `ask` function. Tests mock it without
+touching the network (CLAUDE.md rule 3), `packages/engine` stays pure and
+dependency-free, and changing model is config rather than code. The reply is
+schema-validated with one retry, and the retry says _what was wrong_ with the first
+answer — a model given the specific problem usually fixes it, while one given the same
+prompt usually repeats itself.
+
+Three things the validator refuses outright, because each would silently move a
+founder's numbers with no way for them to tell: a meaning that is not on the closed
+list, a `raw_name` we never sent, and a second name claiming a meaning already taken.
+`canonical: null` is accepted as a real answer — a wrong mapping is worse than none.
+
+A failure is recorded, never thrown: brief §7 says the Inbox still works by hand.
+
+### 2026-10-28 · Two serious bugs, found by one failing test
+
+A test asserting that unmapping a name removes its step state failed, and tracing it
+turned up two separate faults.
+
+**1. A recompute run was never marked done, so later mapping changes silently did
+nothing.** The run only reached `done` when a chunk came back with _zero_ events, so a
+rebuild that fitted in one chunk left it `running` for ever. And because
+`queueRecompute` joins an existing run rather than starting a second, every later
+mapping change was swallowed: the founder changes a mapping, sees no change, and has
+no way to find out why. A short chunk is now the last chunk and finishes the run.
+
+This is the worst class of bug this product can have — a number that quietly stops
+updating — and it would not have shown up in any single-change test.
+
+**2. `event_count` counted batches, not events.** It was incremented inside
+`resolveNameId`, which caches per batch, so six events with one name counted once. The
+founder reads that number in the Inbox ("sent 1 time" for something sent 10,000
+times), and the AI prompt uses it to pick the top 60 names by volume — so an
+undercount is a wrong screen _and_ a wrong prompt. Counting now happens per
+occurrence and flushes in one statement per batch, like the daily counters.
+
+### 2026-10-28 · Recompute clears derived state on its first chunk
+
+The step-state merge is order-insensitive, so replaying events over existing rows
+would be safe — but it can only add and update, never remove. A step whose event name
+changed, or one deleted from the funnel, would otherwise keep its old state for ever
+and the founder would see a stage that no longer exists. So the first chunk deletes,
+then rebuilds.
+
+### 2026-10-28 · Recompute and ingest share the same `matchSteps`
+
+Recompute reads the same pure function, over the same funnel, as the live pipeline.
+Two implementations of "which step does this event touch" would eventually disagree,
+and the disagreement would look like a data bug rather than a code bug. The
+equivalence test is what holds it: recomputing after a mapping change gives
+byte-identical step state to ingesting the same events with the final mapping from the
+start.
+
+### 2026-10-28 · A test fixture must not have a real key's shape
+
+GitHub's push protection blocked a push: `sk_live_` followed by 24 alphanumerics in a
+scrubber test — exactly Stripe's shape. The string was invented, and that is beside
+the point. Neither a secret scanner nor the next person reading the file can tell an
+invented key from a leaked one, so it does not belong in the repo at all.
+
+Fixed by using a non-vendor prefix (`key_live_EXAMPLEONLYNOTREAL`), which exercises
+the identical regex branch and could not be mistaken for anything live. The
+`sk_test_abcdefghijklmnop` fixtures in the SDK tests stay: they have to carry a real
+prefix, because what they check is that the constructor REJECTS a publishable key,
+and a 16-character body is nowhere near a real key's length.
+
+`scripts/check-fixtures.mjs` now runs in `pnpm verify` and in CI. Push protection
+already catches this, but only at push time, after a commit has been made and has to
+be amended. This catches it seconds after it is written. The rule is about shape, not
+liveness, and the thresholds are deliberately above placeholder length so the
+legitimate fixtures pass.

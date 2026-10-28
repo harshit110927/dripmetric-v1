@@ -29,6 +29,7 @@ export {
 export type { Ciphertext } from './crypto.js';
 
 export * from './projects.js';
+export * from './dictionary.js';
 
 // Migrations, the schema reset and the `.env` loader live in @dripmetric/db/admin.
 // They touch the filesystem and the schema, so the request path must not be able to

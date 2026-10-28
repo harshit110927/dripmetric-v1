@@ -64,6 +64,11 @@ jobs:
       - name: Script names are not shadowed by pnpm built-ins
         run: pnpm check:names
 
+      # Push protection catches a key-shaped string at push time, after the commit
+      # is already made. This catches it in CI (and in `pnpm verify`) instead.
+      - name: No key-shaped strings in tracked files
+        run: pnpm check:fixtures
+
       # Nothing GPL or AGPL may ship to customers (CLAUDE.md rule 8).
       - name: Licences
         run: pnpm check:licenses

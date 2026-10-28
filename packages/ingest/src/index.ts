@@ -7,6 +7,15 @@
  */
 export { handleBatch, corsHeaders } from './handler.js';
 export { deleteUser } from './delete-user.js';
+export {
+  queueRecompute,
+  recomputeChunk,
+  recomputeProject,
+  stepUpdatesFor,
+  RECOMPUTE_CHUNK_SIZE,
+  RECOMPUTE_REASONS,
+} from './recompute.js';
+export type { RecomputeReason, RecomputeProgress } from './recompute.js';
 export type { EnqueueFollowUps, HandleBatchOptions } from './handler.js';
 export { IngestError } from './errors.js';
 export type { IngestRequest, IngestResponse, PreparedMessage } from './types.js';
