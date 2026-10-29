@@ -1,5 +1,5 @@
 import type { ScopedDb } from '@dripmetric/db';
-import { withProject } from '@dripmetric/db';
+import { withProject, withoutProject } from '@dripmetric/db';
 import {
   applyStepUpdates,
   loadFunnel,
@@ -224,6 +224,32 @@ export function stepUpdatesFor(funnel: FunnelConfig, event: RecomputableEvent): 
     activeSeconds,
     sessionId: event.session_id === null ? null : Number(event.session_id),
   }));
+}
+
+/**
+ * Projects with a recompute waiting.
+ *
+ * The web app queues a run by writing a row (`queueRecompute`) rather than by
+ * talking to the queue: the request path has no queue client at all, which keeps
+ * pg-boss out of the Next.js bundle and off Supabase's transaction pooler. The
+ * worker finds the work here.
+ */
+export async function pendingRecomputeProjects(limit = 100): Promise<number[]> {
+  return withoutProject(
+    'worker-sweep',
+    async (db) => {
+      const rows = await db.query<{ project_id: number }>(
+        `SELECT DISTINCT project_id
+           FROM recompute_runs
+          WHERE state IN ('pending', 'running')
+          ORDER BY project_id
+          LIMIT $1`,
+        [limit],
+      );
+      return rows.map((row) => row.project_id);
+    },
+    { worker: true },
+  );
 }
 
 /** Runs a whole recompute to completion. Used by the worker and by tests. */

@@ -72,7 +72,8 @@ label {
   font-size: 0.92rem;
 }
 input[type='email'],
-input[type='text'] {
+input[type='text'],
+select {
   width: 100%;
   padding: 0.6rem 0.7rem;
   font: inherit;

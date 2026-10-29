@@ -13,6 +13,13 @@ const WebEnvSchema = z.object({
   EMAIL_FROM: z.string().default('Dripmetric <hello@dripmetric.com>'),
   /** M13 guard (settled decision 1): no live project without confirmed backups. */
   BACKUPS_CONFIRMED: z.string().optional(),
+  /**
+   * Mapping suggestions (brief §7: "a real call behind an env var, a mock in
+   * tests"). Absent means the Inbox works by hand, which it must anyway.
+   */
+  ANTHROPIC_API_KEY: z.string().optional(),
+  /** Brief §7: "keep the model id, price and prompt in config." */
+  ANTHROPIC_MODEL: z.string().default('claude-haiku-5-5'),
 });
 
 let cached: z.infer<typeof WebEnvSchema> | undefined;

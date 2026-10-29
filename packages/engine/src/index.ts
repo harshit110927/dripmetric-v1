@@ -26,6 +26,15 @@ export {
 } from './mapping/prompt.js';
 export type { BuiltPrompt, PromptInput, EventNameFact, PropertyFact } from './mapping/prompt.js';
 
+export { coverage, METRIC_REQUIREMENTS, PRIORITY_ORDER, PAID_EVENT } from './mapping/coverage.js';
+export type {
+  Coverage,
+  CoverageInput,
+  CoverageItem,
+  CoverageTier,
+  SwitchedOff,
+} from './mapping/coverage.js';
+
 export { suggestMappings, parseSuggestions, CONFIDENCES, MAX_ATTEMPTS } from './mapping/suggest.js';
 export type {
   Ask,

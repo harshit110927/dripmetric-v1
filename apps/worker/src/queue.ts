@@ -152,6 +152,8 @@ export const QUEUES = {
   weeklyReport: 'weekly-report',
   /** After a mapping or funnel change: rebuild derived state (M5). */
   recompute: 'recompute',
+  /** Every minute: find the projects with a recompute waiting and fan out (M5). */
+  recomputeSweep: 'recompute-sweep',
   /** After ingest: refresh one user's intent score (M7). */
   recomputeIntent: 'recompute-intent',
 } as const;
@@ -166,4 +168,6 @@ export const QUEUES = {
 export const QUEUE_POLICIES: Partial<Record<string, QueuePolicy>> = {
   [QUEUES.recomputeIntent]: 'short',
   [QUEUES.recompute]: 'short',
+  // One sweep queued at a time: a second would find the same projects.
+  [QUEUES.recomputeSweep]: 'short',
 };

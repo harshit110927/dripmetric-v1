@@ -1,5 +1,6 @@
 import { closePools, withoutProject } from '@dripmetric/db';
 import { loadRootEnv } from '@dripmetric/db/admin';
+import { pendingRecomputeProjects, recomputeChunk } from '@dripmetric/ingest';
 import { QUEUE_POLICIES, QUEUES, startQueue, type Queue } from './queue.js';
 import { log } from './log.js';
 
@@ -7,16 +8,25 @@ import { log } from './log.js';
  * The always-on worker (settled decision D3). One process, pg-boss on the same
  * Postgres, behind the queue adapter.
  *
- * At M1 it declares its queues, proves it can round-trip a job and reports queue
- * health. The sweeps, summaries, alerts and reports arrive with the milestones that
- * need them (M6 onwards); their queue names already exist, so turning each on is a
- * handler, not a change to this file.
+ * It declares its queues, reports queue health, and runs the jobs that exist:
+ * `recompute` since M5. The sweeps, summaries, alerts and reports arrive with the
+ * milestones that need them (M6 onwards); their queue names already exist, so
+ * turning each on is a handler, not a change to this file.
  */
 
 loadRootEnv();
 
 const SWEEP_INTERVAL_SECONDS = 5 * 60; // brief section 8.3: sweeps every 5 minutes
 const HEALTH_INTERVAL_SECONDS = 60;
+
+/**
+ * Chunks a single recompute job runs before handing the queue back.
+ *
+ * A run is resumable, so stopping early costs nothing: the next job picks up at the
+ * cursor. The cap exists so one project with 13 months of events cannot hold the
+ * queue while every other project's mapping change waits (brief §7).
+ */
+const RECOMPUTE_CHUNKS_PER_JOB = 20;
 
 async function main(): Promise<void> {
   log.info('worker starting');
@@ -38,8 +48,37 @@ async function main(): Promise<void> {
     log.debug('sweep-leaks tick');
   });
 
+  /*
+   * The recompute job (brief §7, CLAUDE.md rule 10).
+   *
+   * The web app queues a run by writing a row, so the sweep is what turns that row
+   * into work. Confirming a mapping therefore rebuilds history without the request
+   * path ever touching the queue.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.recompute, async (jobs) => {
+    for (const job of jobs) {
+      await runRecompute(queue, job.data.projectId);
+    }
+  });
+
+  await queue.work(QUEUES.recomputeSweep, async () => {
+    const projects = await pendingRecomputeProjects();
+    if (projects.length === 0) return;
+    log.info('recompute waiting', { projects: projects.length });
+    for (const projectId of projects) {
+      await queue.send(
+        QUEUES.recompute,
+        { projectId },
+        // The queue is `short`: a project already waiting is not queued twice.
+        { singletonKey: `recompute:${projectId}` },
+      );
+    }
+  });
+
   // Every 5 minutes. Real cron with time zones arrives with the jobs that need them.
   await queue.schedule(QUEUES.sweepLeaks, '*/5 * * * *');
+  // Every minute: a founder who changes a mapping should not wait five.
+  await queue.schedule(QUEUES.recomputeSweep, '* * * * *');
 
   const health = setInterval(() => {
     void reportHealth(queue);
@@ -59,6 +98,30 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+}
+
+/**
+ * Drains one project's recompute, bounded.
+ *
+ * `now` is passed in from here rather than read inside the job, because the engine
+ * and every job that calls it take time as a parameter (CLAUDE.md rule 9).
+ */
+async function runRecompute(queue: Queue, projectId: number): Promise<void> {
+  const now = new Date();
+  let chunks = 0;
+
+  for (; chunks < RECOMPUTE_CHUNKS_PER_JOB; chunks++) {
+    const progress = await recomputeChunk(projectId, now);
+    if (progress === null) return; // nothing queued any more
+    if (progress.done) {
+      log.info('recompute done', { projectId, runId: progress.runId, events: progress.eventsSeen });
+      return;
+    }
+  }
+
+  // Still going: hand the queue back and come straight back to it.
+  log.info('recompute continuing', { projectId, chunks });
+  await queue.send(QUEUES.recompute, { projectId }, { singletonKey: `recompute:${projectId}` });
 }
 
 /** Queue depth, oldest job age and failure rate: the M13 metrics, wired from the start. */

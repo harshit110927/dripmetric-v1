@@ -58,7 +58,9 @@ pnpm verify                  # everything CI runs. NOT `pnpm ci`: that is a pnpm
 apps/web          Next.js 16 founder app + public API route handlers (thin adapters only)
 apps/worker       Node process: pg-boss jobs (sweeps, summaries, alerts, reports, retention)
 packages/catalog  event catalog, context fields, traits, canonical meanings — typed + Zod
-packages/ingest   framework-agnostic ingest pipeline (MUST NOT import next/*)
+packages/ingest   framework-agnostic ingest pipeline (MUST NOT import next/*), plus the
+                  dictionary and derived-state jobs (recompute, dictionary facts,
+                  suggestion runs): the only package that may use db AND engine
 packages/engine   pure functions: funnel+timing, intent, leaks, stats (take `now`, no I/O)
 packages/db       plain-SQL migrations, scoped query helpers, can(project, feature)
 packages/sdk      npm package `dripmetric` v2 — dripmetric/browser, dripmetric/server

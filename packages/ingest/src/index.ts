@@ -11,11 +11,20 @@ export {
   queueRecompute,
   recomputeChunk,
   recomputeProject,
+  pendingRecomputeProjects,
   stepUpdatesFor,
   RECOMPUTE_CHUNK_SIZE,
   RECOMPUTE_REASONS,
 } from './recompute.js';
 export type { RecomputeReason, RecomputeProgress } from './recompute.js';
+export {
+  refreshDictionaryFacts,
+  PROPERTY_SAMPLE_PER_NAME,
+  SEQUENCE_SAMPLE_USERS,
+} from './dictionary-facts.js';
+export type { DictionaryFactsResult } from './dictionary-facts.js';
+export { runSuggestions, promptInputFrom } from './suggest-run.js';
+export type { SuggestionRun } from './suggest-run.js';
 export type { EnqueueFollowUps, HandleBatchOptions } from './handler.js';
 export { IngestError } from './errors.js';
 export type { IngestRequest, IngestResponse, PreparedMessage } from './types.js';

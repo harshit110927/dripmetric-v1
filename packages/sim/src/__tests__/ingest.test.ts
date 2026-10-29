@@ -1,8 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
-import { closePools, createProject, withProject, type CreatedProject } from '@dripmetric/db';
+import {
+  closePools,
+  confirmMapping,
+  createProject,
+  inbox,
+  withProject,
+  type CreatedProject,
+} from '@dripmetric/db';
 import { loadRootEnv, runMigrations } from '@dripmetric/db/admin';
-import { handleBatch } from '@dripmetric/ingest';
+import type { AskOptions, AskResult } from '@dripmetric/engine';
+import { handleBatch, queueRecompute, recomputeProject, runSuggestions } from '@dripmetric/ingest';
 import { runSimulation } from '../run.js';
 import { configureProject } from '../setup.js';
 import { scoreIngest, share } from '../score.js';
@@ -297,6 +305,102 @@ describe('a simulator run through real ingest', () => {
     );
     expect(Number(rows[0]!.count)).toBe(0);
   }, 120_000);
+
+  /*
+   * M5 exit check (brief §11): "with simulator data that uses renamed events, the
+   * Inbox lists the unmapped names."
+   *
+   * The `renamed-event` fault is a deploy that renames a core action partway through
+   * the run. The old name keeps its mapping; the new one must land in the Inbox and
+   * count toward nothing until the founder maps it (settled decision 10). The
+   * mapping must then rebuild the history that arrived under the new name.
+   */
+  it('puts a renamed event in the Inbox, and mapping it rebuilds the history', async () => {
+    const project = await createProject({ name: 'Sim renamed' });
+    const definition = product('selfserve');
+    const renamedTo = `${definition.coreActionName.toLowerCase().replace(/ /g, '_')}_v2`;
+
+    const run = runSimulation({
+      product: 'selfserve',
+      users: 80,
+      seed: 1,
+      faults: ['renamed-event'],
+    });
+    expect(run.faultLog.map((f) => f.fault)).toContain('renamed-event');
+
+    // A funnel step on the core action, so the cost of the rename is visible.
+    await withProject(project.live.id, async (db) => {
+      const funnel = await db.one<{ id: number }>(
+        `INSERT INTO funnels (project_id, name) VALUES ($1, 'Onboarding') RETURNING id`,
+        [db.projectId],
+      );
+      await db.exec(
+        `INSERT INTO funnel_steps (project_id, funnel_id, position, label, event_name, importance)
+         VALUES ($1, $2, 1, $3, $4, 'key')`,
+        [db.projectId, funnel.id, definition.coreActionName, definition.coreActionName],
+      );
+    });
+
+    const tally = await send(run.messages, keysOf(project));
+    expect(tally.errors).toEqual({});
+
+    // The Inbox lists the founder's new name, with the events behind it.
+    const waiting = await withProject(project.live.id, inbox);
+    const renamed = waiting.find((entry) => entry.rawName === renamedTo);
+    expect(
+      renamed,
+      `"${renamedTo}" is not in the Inbox: ${waiting.map((e) => e.rawName).join(', ')}`,
+    ).toBeDefined();
+    expect(renamed!.status).toBe('unmapped');
+    expect(renamed!.canonical).toBeNull();
+    expect(renamed!.eventCount).toBeGreaterThan(0);
+
+    // It counts toward nothing: the step state knows only the events sent under the
+    // original name.
+    const before = await withProject(project.live.id, (db) =>
+      db.query<{ count: string }>('SELECT count(*) FROM user_step_state'),
+    );
+
+    // The mock AI proposes a mapping, the founder confirms it, history is rebuilt.
+    const ask = async ({ system, user }: AskOptions): Promise<AskResult> => {
+      // The prompt is built from shape-only facts, so nothing identifying is in it.
+      expect(`${system}\n${user}`).toContain(renamedTo);
+      return {
+        text: JSON.stringify({
+          mappings: [
+            {
+              raw_name: renamedTo,
+              canonical: 'Core Action',
+              confidence: 'high',
+              reason: 'Same words as the event that stopped arriving.',
+            },
+          ],
+        }),
+        inputTokens: 1,
+        outputTokens: 1,
+      };
+    };
+
+    const now = new Date(run.truthFile.endedAt);
+    const suggested = await withProject(project.live.id, (db) =>
+      runSuggestions(db, null, now, ask),
+    );
+    expect(suggested.stored).toBe(1);
+
+    const changed = await withProject(project.live.id, (db) =>
+      confirmMapping(db, renamedTo, definition.coreActionName, null, now),
+    );
+    expect(changed).toBe(true);
+    await withProject(project.live.id, (db) => queueRecompute(db, 'mapping'));
+    await recomputeProject(project.live.id, now);
+
+    const after = await withProject(project.live.id, (db) =>
+      db.query<{ count: string }>('SELECT count(*) FROM user_step_state'),
+    );
+    // More people have reached the step than before the mapping existed, which is
+    // the whole point: the events were always there, we just could not read them.
+    expect(Number(after[0]!.count)).toBeGreaterThan(Number(before[0]!.count));
+  }, 180_000);
 
   it('absorbs a burst without error, capping it rather than storing it all', async () => {
     const project = await createProject({

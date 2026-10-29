@@ -5,6 +5,7 @@
   "references": [
     { "path": "../../packages/catalog" },
     { "path": "../../packages/db" },
-    { "path": "../../packages/engine" }
+    { "path": "../../packages/engine" },
+    { "path": "../../packages/ingest" }
   ]
 }

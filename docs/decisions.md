@@ -673,3 +673,103 @@ already catches this, but only at push time, after a commit has been made and ha
 be amended. This catches it seconds after it is written. The rule is about shape, not
 liveness, and the thresholds are deliberately above placeholder length so the
 legitimate fixtures pass.
+
+### 2026-10-29 · Dictionary facts are a job, not part of the ingest hot path
+
+The property keys, shape-only samples and sequence positions the AI prompt needs are
+built by `refreshDictionaryFacts`, which scans a bounded sample on demand, rather than
+being accumulated on every event.
+
+Three reasons, in order of weight. The scrubber runs once per property, where it can
+be tested, instead of once per event on the hot path. Sequence position needs a
+person's whole history, which a single event cannot know. And it is re-runnable: when
+the scrubber improves, the stored samples can be rebuilt — impossible if values had
+been scrubbed on the way in and the originals thrown away.
+
+The sampling is bounded per name by a lateral join (200 events each, on
+`events_project_name_time_idx`), not by a global `LIMIT`. A global limit would have
+sampled only the busiest names and left the rare ones — the ones most likely to be
+sitting unmapped in the Inbox — with no properties at all. The reach
+(`distinct_users`) is counted exactly over every event, because the founder reads that
+number; only the median position is taken from a sample of whole sequences.
+
+### 2026-10-29 · The withheld-data audit record comes from the first scrub gate
+
+There are two scrub gates: one when the facts are stored, one when the prompt is
+built. A test found that `runSuggestions` was recording the SECOND one's `dropped`
+list in the audit row — which is empty by construction, because the first gate had
+already replaced every unsafe sample with null.
+
+So the one thing we most want logged — what personal data we refused to send to a
+model — would have logged an empty list for every real project. The row now records
+both: `withheld` from the first gate, and `droppedAtPrompt` from the second, which
+should always be empty. If it ever is not, a sample that was stored as safe was not,
+and that is worth finding in the log rather than inferring later.
+
+### 2026-10-29 · No "failed payments" on the coverage checklist
+
+A coverage requirement named `Payment Failed`, which carries no checklist priority
+because Appendix A says it arrives "after at least one payment" — it is churn, not a
+leak between a first visit and a first payment. The metric could therefore never have
+turned on, whatever the founder sent, and the screen would have told them to send an
+event that would not have helped.
+
+The requirement was wrong, not the catalog: recovery is a later layer. The test now
+asserts that every required event is ON the checklist, not merely in the catalog,
+which is what caught it.
+
+### 2026-10-29 · `packages/ingest` is where db and engine meet
+
+`runSuggestions` composes three things: the facts (db), the rules and the prompt
+(engine), and the model (an injected function). Something has to know all three.
+
+It is not `packages/db` (the data layer must not depend on the engine), not
+`packages/engine` (pure, no I/O), and not `apps/web` (then the worker could not call
+it, and it could not be tested with the existing integration helpers). So it lives in
+`packages/ingest`, next to `recompute.ts` and `dictionary-facts.ts`: the dictionary
+and derived-state jobs, in the one package allowed to use both. A fourth package for
+three files was not worth it. `CLAUDE.md`'s repo map now says so.
+
+### 2026-10-29 · The web app queues a recompute by writing a row
+
+`queueRecompute` inserts into `recompute_runs`; a worker sweep every minute finds
+pending runs and fans them out onto the `recompute` queue. The request path therefore
+has no queue client at all.
+
+That keeps pg-boss out of the Next.js bundle, and — the real reason — off Supabase's
+transaction pooler, which supports neither advisory locks nor `LISTEN`/`NOTIFY`. One
+job drains at most 20 chunks (100,000 events) and then re-queues, so a project with
+13 months of history cannot hold the queue while another founder's mapping change
+waits. A run is resumable, so stopping early costs nothing.
+
+### 2026-10-29 · The model call: SDK, no temperature, no thinking parameter
+
+`@anthropic-ai/sdk` 1.3.0 (Apache-2.0, passes `check:licenses`), in exactly one file,
+behind the engine's injected `ask`. Three things verified against that version rather
+than remembered, each of which would have been a 400 or a silent wrong result:
+
+- `temperature`, `top_p` and `top_k` are rejected on every model from API version
+  2026-10-21, so none is sent.
+- Haiku 5.5 has adaptive thinking on by default and rejects a thinking budget, so the
+  `thinking` parameter is not sent either; depth is `output_config.effort`, set to
+  `low` because mapping is a classification over short facts.
+- A reply can stop with `stop_reason: "refusal"` at HTTP 200. Reading `content`
+  without checking first would parse an empty reply and report it as a model that
+  answered badly.
+
+The model id stays in config (`ANTHROPIC_MODEL`, default `claude-haiku-5-5`:
+$0.10/$0.50 per million tokens, so a 4,000-in/1,000-out run costs about $0.0009).
+Without `ANTHROPIC_API_KEY` the button is not shown and the Inbox works by hand,
+which it has to anyway. Tests use an injected mock and never reach the network.
+
+### 2026-10-29 · Setup completion is one condition, not two rules
+
+Settled decision 9 requires the paid event to finish setup. Rather than a separate
+check, the paid event is simply one of the five facts, and setup completes when all
+five are confirmed — a single SQL condition. Two rules that meant the same thing
+would eventually stop meaning the same thing.
+
+`confirmFact` refuses a fact that is not ready and says why in the founder's words.
+Confirming "which event means someone has paid" when no such event exists would
+record a decision about nothing, and every screen would then claim a fact it does not
+have.

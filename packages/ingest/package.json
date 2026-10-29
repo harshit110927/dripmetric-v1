@@ -19,6 +19,7 @@
   "dependencies": {
     "@dripmetric/catalog": "workspace:*",
     "@dripmetric/db": "workspace:*",
+    "@dripmetric/engine": "workspace:*",
     "zod": "4.6.7"
   },
   "devDependencies": {

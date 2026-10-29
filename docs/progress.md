@@ -88,17 +88,33 @@ Also here, early, because the SDK's `deleteUser()` would otherwise be a method t
 404s: `DELETE /v1/users/:userId`, with its own tests. M11 adds the audit-log view and
 the retention job around it.
 
-## M5 · Product model and event matching — `[ ]`
+## M5 · Product model and event matching — `[x]`
 
 **Build:** brief §7: URL rules, the event dictionary and Inbox, AI suggestions (a real call
 behind an env var, a mock in tests), the five product facts and setup logic, paid-event
 gating, the `recompute` job, the coverage checklist.
 
-- [ ] with renamed simulator events, the Inbox lists the unmapped names
-- [ ] the mock AI proposes mappings
-- [ ] confirming one recomputes history
-- [ ] the equivalence test passes (recompute == ingest with final mapping from the start)
-- [ ] the scrub test shows no email, phone, id or token reaches the model prompt
+- [x] with renamed simulator events, the Inbox lists the unmapped names
+      (`packages/sim/src/__tests__/ingest.test.ts`: the `renamed-event` fault over 80
+      seeded users; the new name is `unmapped` with its events behind it, and mapping
+      it rebuilds the step state that arrived under it)
+- [x] the mock AI proposes mappings (`packages/ingest/src/__tests__/mapping.test.ts`:
+      stored as `suggested` with a reason and a confidence; one retry on an unusable
+      reply; a confirmed name is never overwritten)
+- [x] confirming one recomputes history (0 step-state rows before the mapping, 2
+      after, from events that arrived while the name was unmapped)
+- [x] the equivalence test passes (recompute == ingest with final mapping from the
+      start) — `packages/ingest/src/__tests__/recompute.test.ts`
+- [x] the scrub test shows no email, phone, id or token reaches the model prompt (a
+      mock records the exact prompt; email, token, URL with query, Stripe-style id and
+      a person's name are all absent, the property KEYS are present, and the withheld
+      list is audited)
+
+Also proven live, against the running dev stack: the setup screen shows the five
+questions with where each answer came from, the paid-event note and the switched-off
+table; the Inbox lists the unmapped name with the meanings it may be mapped to; a
+queued `recompute_runs` row was found by the worker sweep within a minute, fanned out
+and drained to `done`.
 
 ## M6 · Funnel and timing engine — `[ ]`
 

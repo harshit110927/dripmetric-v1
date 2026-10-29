@@ -25,6 +25,7 @@
     "@dripmetric/db": "workspace:*"
   },
   "devDependencies": {
+    "@dripmetric/engine": "workspace:*",
     "@dripmetric/ingest": "workspace:*",
     "@types/pg": "8.23.1",
     "pg": "8.23.1",
