@@ -1,7 +1,8 @@
 import { entitlements, type Entitlements } from './entitlements.js';
 import { maskingSecret } from './projects.js';
 import { revealState } from './reveals.js';
-import { coarseTime, serializePerson, type PersonRow, type SerializedPerson } from './serialize.js';
+import { coarseTime, serializePerson, type SerializedPerson } from './serialize.js';
+import { PERSON_COLUMNS, toPersonRow, type RawPersonRow } from './person-row.js';
 import type { ScopedDb } from './scope.js';
 
 /**
@@ -11,42 +12,6 @@ import type { ScopedDb } from './scope.js';
  * are read in exactly one query in this file and handed straight to the serializer,
  * so there is no path from a screen to an email that does not pass the gate.
  */
-
-const PERSON_COLUMNS = `
-  u.user_key, u.external_id, u.email_ciphertext, u.email_key_id, u.email_type,
-  u.name_traits_ciphertext, u.name_traits_key_id, u.traits, u.country,
-  u.signed_up_at, u.last_event_at
-`;
-
-interface RawPersonRow {
-  user_key: number;
-  external_id: string;
-  email_ciphertext: Buffer | null;
-  email_key_id: string | null;
-  email_type: PersonRow['emailType'];
-  name_traits_ciphertext: Buffer | null;
-  name_traits_key_id: string | null;
-  traits: Record<string, unknown>;
-  country: string | null;
-  signed_up_at: Date | null;
-  last_event_at: Date | null;
-}
-
-function toPersonRow(row: RawPersonRow): PersonRow {
-  return {
-    userKey: row.user_key,
-    externalId: row.external_id,
-    emailCiphertext: row.email_ciphertext,
-    emailKeyId: row.email_key_id,
-    emailType: row.email_type,
-    nameTraitsCiphertext: row.name_traits_ciphertext,
-    nameTraitsKeyId: row.name_traits_key_id,
-    traits: row.traits,
-    country: row.country,
-    signedUpAt: row.signed_up_at,
-    lastEventAt: row.last_event_at,
-  };
-}
 
 /** Everything the serializer needs, read once per screen rather than per row. */
 export interface SerializeContext {

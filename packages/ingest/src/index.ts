@@ -114,3 +114,12 @@ export {
 } from './pipeline/step-state.js';
 export type { FunnelConfig, StepDefinition, StepMatch } from './pipeline/step-state.js';
 export type { FollowUp, ProjectContext } from './pipeline/index.js';
+
+// --- M10: alerts and reports (brief §9) -------------------------------------
+export {
+  decideProjectAlerts,
+  deliverDueAlerts,
+  runAlertDispatch,
+  postWebhook,
+} from './alerts/dispatch.js';
+export type { DeliveryResult, DispatchResult, PostWebhook } from './alerts/dispatch.js';

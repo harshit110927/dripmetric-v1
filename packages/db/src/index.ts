@@ -38,7 +38,8 @@ export * from './serialize.js';
 export * from './reveals.js';
 export * from './people.js';
 export * from './dashboard-reads.js';
-
+export * from './integrations.js';
+export * from './alerts.js';
 // Migrations, the schema reset and the `.env` loader live in @dripmetric/db/admin.
 // They touch the filesystem and the schema, so the request path must not be able to
 // reach them, and keeping them out of here means the web bundle cannot pull them in.

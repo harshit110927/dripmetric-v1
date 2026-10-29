@@ -1382,3 +1382,64 @@ One difference was load-bearing and nearly lost: the ingest test sent NO user-ag
 header while the other three sent a browser one, and that test asserts how many
 messages are filtered, which depends on bot detection reading the agent. Those calls
 pass `{ userAgent: null }` rather than inheriting whichever default looked tidier.
+
+### 2026-10-29 · Deciding an alert and delivering it are two passes
+
+`decideProjectAlerts` writes the feed row and the delivery row; `deliverDueAlerts`
+posts what is due and is the only part that touches the network.
+
+Splitting them is what makes the retry safe. A post that fails has already been
+recorded in the feed, so retrying is a retry of one HTTP request and never a second
+alert. It is also what makes the quiet-hours hold trivial: a held alert is a row with
+a later `due_at`, and the deliver pass picks it up when the morning comes. No timer,
+no in-memory queue, nothing that a restart loses.
+
+The channel payload is rebuilt from the STORED alert rather than from the leak. A
+retry an hour later has to send what the first attempt would have sent: thresholds
+move, people change, and an alert whose text drifted between attempts would leave the
+founder's Slack history disagreeing with their own feed.
+
+### 2026-10-29 · A dropped alert is not in the feed; a capped one is
+
+Over the cap, in quiet hours, no app connected — all of those are still news, so they
+go in the feed with the reason attached. Someone who has paid, been deleted or opted
+out is not news, so nothing is written at all.
+
+The feed is a list of things to act on. Putting "we deliberately did not tell you
+about someone you can no longer contact" in it would be noise that trains a founder
+to stop reading it.
+
+### 2026-10-29 · The webhook URL is decrypted once per sweep, not once per alert
+
+`deliverDueAlerts` resolves each integration once and caches it for the pass. The URL
+is an AES-GCM decryption, and ten alerts in a sweep would otherwise be ten
+decryptions of the same credential.
+
+A 404 or 410 ends the retries rather than spending the remaining four: the channel or
+the app is gone, so the useful thing is to tell the founder their integration is
+broken, which is what `integrations.last_error` and the settings screen are for.
+
+### 2026-10-29 · `pnpm -r` does not order the examples app after the SDK it imports
+
+Widening `build` to `pnpm -r build` made CI fail where it had passed: the examples
+app could not resolve `dripmetric/browser` or `dripmetric/server`. It passed here only
+because `packages/sdk/dist` was already on disk; a clean checkout has nothing.
+
+pnpm's recursive order in this workspace is, verifiably,
+`pnpm -r --workspace-concurrency=1 exec pwd`:
+
+    examples/next-app, catalog, db, engine, sdk, ingest, web, worker, sim
+
+Everything after the first entry is topological. `examples/next-app` is placed FIRST,
+ahead of the `dripmetric` package it depends on, even though the dependency is a
+correct `workspace:*` and the symlink into `packages/sdk` exists. Concurrency 1
+changes nothing, so it is the ordering and not a race.
+
+So the root build no longer relies on that ordering: libraries, then apps, then
+examples, as three explicit steps. It also reads as what it is. Verified from a tree
+with every `dist`, `.tsbuildinfo` and `.next` deleted, which is the only way this
+class of bug shows up at all.
+
+Worth remembering for the publishing step: the examples app is the one consumer that
+resolves the SDK through its `exports` map the way a customer will, so "does the SDK
+build before the thing that imports it" is a question with a real answer.
