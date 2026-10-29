@@ -1043,3 +1043,116 @@ Deliberation therefore rests on the plan click, on active time above the product
 median for pricing, and on a second proper visit within a week — all three of which
 real data carries. `classifyPricingView` keeps the toggle and FAQ as inputs so a
 founder who does map such an event gets them without a code change.
+
+### 2026-10-29 · The episode key is text derived from the facts
+
+Brief §4 describes `leak_instances` as holding an "episode number", and brief §8.3
+says the unique key on that table is what guarantees one alert per person per leak.
+
+A number cannot do that job. It would have to be derived from a count of existing
+rows, and two sweeps running at once would both count the same rows and both insert
+episode 2. So the uniqueness is on an episode KEY: text the engine derives from the
+facts — the checkout's timestamp, the step entry they went quiet on, the trial's end
+date. The same episode produces the same key however often a sweep runs, and a
+genuinely new episode produces a different one.
+
+The number is kept beside it for display ("the third time this has happened"), and it
+is only ever display.
+
+The practical consequence is that the rules are free to be simple. They return the
+same finding on every sweep, as a pure function of the facts should, and nothing in
+them has to remember what was already sent.
+
+### 2026-10-29 · Which leaks survive having paid
+
+"Never alert about someone who already paid, was deleted or opted out" (brief §8.3)
+cannot be applied uniformly, because two of the nine leaks are ABOUT paying
+customers: cancelled-or-payment-failed, and payer-going-quiet.
+
+So the guard takes an `ignorePaid` flag, which those two pass and no other does. The
+other two guards — deleted and opted out — have no exception at all: nobody who asked
+to be deleted appears in any number anywhere.
+
+The test drives the guard over every per-person leak from a list that is asserted
+against the definitions table, so a tenth leak cannot be added without being guarded.
+
+### 2026-10-29 · The quick-exit leak read its own output
+
+`pricingQuickExitAt` was loaded from `leak_instances` — the table the quick-exit leak
+writes to. The leak could therefore never fire a first time, and the simulator
+reported 0 quick exits out of 406 first-ever pricing views.
+
+It now comes from the pricing classifier, shared with the intent engine, which needs
+the same readings for its own two signals. One definition of "quick exit", used by the
+leak, the rate and the score.
+
+### 2026-10-29 · Sessions never recorded their end, page count or active seconds
+
+Brief §4 describes a session row as "start, end, active seconds, page count". Ingest
+wrote the start. Across a 250-person simulator run: 909 sessions, 0 with `ended_at`,
+0 page views counted, 0 active seconds.
+
+The pricing quick-exit rule needs "the session ends within 2 minutes", so with no end
+time it could not fire — which is how this was found, a milestone after the SDK that
+sends the numbers landed.
+
+Now accumulated per batch and flushed in one statement, like the daily counters:
+`ended_at` is GREATEST so a late event cannot shorten a session, and page views and
+active seconds are summed from what ARRIVED rather than from what was stored, for the
+same reason the daily counters are — a session that went over the volume cap still
+had those page views.
+
+`ended_at` is "the last event we have seen in this session". That is the honest
+definition: a session has no end event, only a last one. The sweeps run after the
+fact, so by the time a rule reads it the session really is over.
+
+### 2026-10-29 · One pricing view, not one row per event describing it
+
+A single visit to the pricing page usually arrives twice: as a page view of a path a
+URL rule maps to `Pricing Viewed`, and as a `Pricing Viewed` event the founder sends
+by hand. Both were counted.
+
+That did two things. It doubled the denominator of the quick-exit rate — 406 views
+where there were 203 — and, worse, it made every visitor's first visit look like their
+second, so nothing could ever be a "first-ever pricing view" and the rate read 0.0% on
+data where one visitor in seven glances and leaves.
+
+A pricing view is now one row: the page view where there is one, because it carries
+the path and can be matched to the `Page Left` that knows how long they stayed, and
+the hand-sent event only in a session that has no pricing page view. A project that
+sends only the event keeps its views with no active time, which is honest — without a
+`Page Left` on the page, nobody told us how long they stayed.
+
+With all three fixed the rate reads 13.8%, 28 of 203, split four ways.
+
+**It also moved an M7 number.** The calibration's precision at threshold 60 was
+recorded as 61.0% when M7 landed; it is 46.3% now. Nothing about the score changed —
+the pricing +10 simply reaches the people who genuinely read the page, so more
+non-payers sit above 60. The lower figure is the true one, and `docs/progress.md` has
+been corrected rather than left reading well.
+
+### 2026-10-29 · A Poisson test, not a percentage drop
+
+Brief §8.3 asks for "a one-sided Poisson test" on the step-completion collapse, and
+the reason is worth recording because a percentage would have been so much easier.
+
+A step that normally gets 12 completions a day and got 6 is a quiet Tuesday. The same
+halving on a step that gets 1,200 a day is an outage. A percentage cannot tell those
+apart; a probability can, and the test says so in the fixture.
+
+The CDF is computed with a multiplicative recurrence rather than `λ^i / i!`, which
+overflows to Infinity for a λ in the hundreds — exactly the busy step whose collapse
+matters most. The minimum-expected check comes first and is not negotiable: without
+it a step that usually gets two a day and got none would fire at p = 0.13 on a quiet
+Sunday, and the founder would learn to ignore the alert that matters.
+
+### 2026-10-29 · Resolving a leak, and never deleting it
+
+A leak that stops being true is marked `resolved` with the time, and the row stays.
+The episode happened, the dashboard's change-against-last-week needs it, and deleting
+it would make the product look better than it was.
+
+What resolves what is explicit rather than general: paying answers the four unpaid
+leaks, coming back answers the stall and the two quiet leaks, and a deletion or an
+opt-out resolves everything about that person. A blanket "any later activity resolves
+any leak" would have quietly closed a cancellation because the person logged in again.

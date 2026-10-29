@@ -254,7 +254,9 @@ async function loadUserRows(db: ScopedDb, now: Date): Promise<UserRow[]> {
 }
 
 interface PricingRow {
-  user_key: number;
+  /** Null for a visitor who never identified: they count in rates, not dollars. */
+  user_key: number | null;
+  visitor: number;
   occurred_at: Date;
   session_id: string | null;
   active_seconds: string | null;
@@ -263,6 +265,11 @@ interface PricingRow {
   clicked_plan: boolean;
   opened_faq: boolean;
   session_ended_at: Date | null;
+  /** The session's context, for the quick-exit rate's four splits (brief §8.3). */
+  source: string | null;
+  device: string | null;
+  country: string | null;
+  trial_day: string | null;
 }
 
 /**
@@ -273,7 +280,7 @@ interface PricingRow {
  * are matched by session and path, which is also why `Page Left` is stored for key
  * pages: pricing is one (brief §4's volume guards).
  */
-async function loadPricingRows(db: ScopedDb): Promise<PricingRow[]> {
+export async function loadPricingRows(db: ScopedDb): Promise<PricingRow[]> {
   return db.query<PricingRow>(
     `WITH pricing_paths AS (
        SELECT DISTINCT p.id
@@ -283,14 +290,54 @@ async function loadPricingRows(db: ScopedDb): Promise<PricingRow[]> {
           AND r.canonical = $2
           AND (p.path = r.pattern OR (r.pattern LIKE '%*' AND p.path LIKE replace(r.pattern, '*', '%')))
         WHERE p.project_id = $1 AND r.id IS NOT NULL
-     ), views AS (
-       SELECT e.user_key, e.occurred_at, e.session_id, e.path_id, e.props
+     ), candidates AS (
+       /*
+        * Anonymous visitors are included.
+        *
+        * Brief §8.2: "Anonymous visitors count in rates, not dollars." The
+        * quick-exit RATE is one of the brief's headline numbers, and a rate whose
+        * denominator counted everyone while its numerator counted only signed-up
+        * users would read lower the more anonymous traffic a founder had.
+        */
+       SELECT e.user_key,
+              coalesce(e.user_key, -e.anon_key) AS visitor,
+              e.occurred_at, e.session_id, e.path_id, e.props,
+              (e.path_id IN (SELECT id FROM pricing_paths)) AS on_pricing_page
          FROM events e
          JOIN event_names n ON n.project_id = e.project_id AND n.id = e.name_id
         WHERE e.project_id = $1
-          AND e.user_key IS NOT NULL
+          AND coalesce(e.user_key, e.anon_key) IS NOT NULL
           AND (n.canonical = $2 OR e.path_id IN (SELECT id FROM pricing_paths))
           AND n.canonical IN ($2, 'Page Viewed')
+     ), views AS (
+       /*
+        * One row per pricing VIEW, not per event describing it.
+        *
+        * A single visit to the pricing page usually arrives twice: as a page view of
+        * a path a URL rule maps to Pricing Viewed, and as a Pricing Viewed event the
+        * founder sends by hand. Counting both doubled the denominator of the
+        * quick-exit rate AND made every visitor's first visit look like their
+        * second — so nothing could ever be a "first-ever pricing view", and the rate
+        * read 0 of 406 on data where a third of visitors glance and leave.
+        *
+        * The page view wins where there is one, because it carries the path and can
+        * therefore be matched to the Page Left that knows how long they stayed. A
+        * project that only sends the event keeps its views, with no active time,
+        * which is honest: without a Page Left on the page nobody told us.
+        */
+       SELECT user_key, visitor, occurred_at, session_id, path_id, props
+         FROM candidates
+        WHERE on_pricing_page
+       UNION ALL
+       SELECT user_key, visitor, occurred_at, session_id, path_id, props
+         FROM candidates c
+        WHERE NOT c.on_pricing_page
+          AND NOT EXISTS (
+            SELECT 1 FROM candidates p
+             WHERE p.on_pricing_page
+               AND p.visitor = c.visitor
+               AND p.session_id IS NOT DISTINCT FROM c.session_id
+          )
      ), leaves AS (
        /*
         * The active time and the page speed arrive on the Page Left event, matched
@@ -312,6 +359,7 @@ async function loadPricingRows(db: ScopedDb): Promise<PricingRow[]> {
         WHERE e.project_id = $1 AND n.canonical = $4
      )
      SELECT v.user_key,
+            v.visitor,
             v.occurred_at,
             v.session_id::text AS session_id,
             l.active_seconds::text AS active_seconds,
@@ -319,22 +367,41 @@ async function loadPricingRows(db: ScopedDb): Promise<PricingRow[]> {
             false AS toggled,
             (c.session_id IS NOT NULL) AS clicked_plan,
             false AS opened_faq,
-            s.ended_at AS session_ended_at
+            s.ended_at AS session_ended_at,
+            coalesce(
+              CASE WHEN s.paid_click THEN 'paid: ' || coalesce(s.paid_network, 'unknown') END,
+              s.utm_source, s.referrer_domain, 'direct'
+            ) AS source,
+            coalesce(s.device_type, 'unknown') AS device,
+            coalesce(s.country, 'unknown') AS country,
+            CASE
+              WHEN u.trial_started_at IS NULL THEN 'no trial'
+              ELSE 'day ' || floor(
+                extract(epoch FROM v.occurred_at - u.trial_started_at) / 86400
+              )::text
+            END AS trial_day
        FROM views v
        LEFT JOIN leaves l ON l.session_id = v.session_id AND l.path_id = v.path_id
        LEFT JOIN plan_clicks c ON c.session_id = v.session_id
        LEFT JOIN sessions s ON s.project_id = $1 AND s.id = v.session_id
-      ORDER BY v.user_key, v.occurred_at`,
+       LEFT JOIN end_users u ON u.project_id = $1 AND u.user_key = v.user_key
+      ORDER BY v.visitor, v.occurred_at`,
     [db.projectId, INTENT_EVENTS.pricingViewed, INTENT_EVENTS.pageLeft, INTENT_EVENTS.planSelected],
   );
 }
 
-/** Turns the rows into the engine's pricing facts, in order, per person. */
+/**
+ * Turns the rows into the engine's pricing facts, in order, per visitor.
+ *
+ * Keyed by VISITOR rather than by user, so an anonymous visitor's second view is
+ * their second view. Keying on the user would have made every anonymous view a
+ * first-ever one, and "first-ever pricing view" is half the quick-exit rule.
+ */
 function pricingViewsByUser(rows: readonly PricingRow[]): Map<number, PricingViewFact[]> {
   const byUser = new Map<number, PricingViewFact[]>();
 
   for (const row of rows) {
-    const list = byUser.get(row.user_key) ?? [];
+    const list = byUser.get(row.visitor) ?? [];
     const previous = list[list.length - 1];
 
     list.push({
@@ -351,10 +418,62 @@ function pricingViewsByUser(rows: readonly PricingRow[]): Map<number, PricingVie
       previousViews: list.length,
       previousViewAt: previous?.at ?? null,
     });
-    byUser.set(row.user_key, list);
+    byUser.set(row.visitor, list);
   }
 
   return byUser;
+}
+
+export interface PricingReadingRow {
+  /** Null for an anonymous visitor. */
+  userKey: number | null;
+  visitor: number;
+  at: Date;
+  pattern: string;
+  says: string;
+  countsAsLeak: boolean;
+  source: string;
+  device: string;
+  country: string;
+  trialDay: string;
+}
+
+/**
+ * Every pricing view, classified, with the context the splits need.
+ *
+ * One loader for two callers: the intent facts need to know whether a person read the
+ * pricing page or deliberated over it, and the leak engine needs the quick exits and
+ * the rate. Computing it twice would be two definitions of "quick exit".
+ */
+export async function loadPricingReadings(db: ScopedDb): Promise<PricingReadingRow[]> {
+  const rows = await loadPricingRows(db);
+  const byVisitor = pricingViewsByUser(rows);
+  const thresholds = pricingThresholds(
+    rows.map((row) => (row.active_seconds === null ? 0 : Number(row.active_seconds))),
+  );
+
+  // The views were built in the same order as the rows, per visitor, so walking both
+  // together lines each reading up with the row it came from.
+  const seen = new Map<number, number>();
+  return rows.map((row) => {
+    const index = seen.get(row.visitor) ?? 0;
+    seen.set(row.visitor, index + 1);
+    const view = byVisitor.get(row.visitor)![index]!;
+    const reading = classifyPricingView(view, thresholds);
+
+    return {
+      userKey: row.user_key,
+      visitor: row.visitor,
+      at: row.occurred_at,
+      pattern: reading.pattern,
+      says: reading.says,
+      countsAsLeak: reading.countsAsLeak,
+      source: row.source ?? 'direct',
+      device: row.device ?? 'unknown',
+      country: row.country ?? 'unknown',
+      trialDay: row.trial_day ?? 'no trial',
+    };
+  });
 }
 
 export interface IntentFactsResult {

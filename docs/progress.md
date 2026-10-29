@@ -162,20 +162,37 @@ its formula text.
       shortfall is printed with them; see `docs/decisions.md`. Two bugs found on the
       way: the same figure read 49.2% before them.
 - [x] the calibration job prints recall, precision and lift on a product with ≥ 30
-      payers — 50 payers of 281 users: recall 100.0%, precision 61.0%, a lift per
-      signal, and two weight changes offered for approval and never applied
+      payers — 50 payers of 281 users: recall 100.0%, precision 46.3%, a lift per
+      signal, and two weight changes offered for approval and never applied.
+      (Precision read 61.0% when M7 landed. M8 found that each pricing view was
+      counted twice, which had been withholding the pricing +10 from people who
+      genuinely read the page; with them scored correctly, more non-payers sit above
+      60 and the honest figure is lower. See `docs/decisions.md`.)
 
-## M8 · Leak engine — `[ ]`
+## M8 · Leak engine — `[x]`
 
 **Build:** brief §8.3: all nine leaks with episodes and resets, the sweeps, the adaptive
 stall, the quick-exit rate.
 
-- [ ] fixtures with time travel for every leak
-- [ ] each fires exactly once per episode; a returning user resets it
-- [ ] none fires for a paid, deleted or opted-out user
-- [ ] the collapse test fires only when ≥ 10 completions were expected and p < 0.01
-- [ ] the simulator report prints the share of stalled users caught
-- [ ] a leak lacking the paid event or trial dates shows as off, with its reason
+- [x] fixtures with time travel for every leak (`packages/engine/src/__tests__/leaks.test.ts`,
+      46 cases including the brief's own worked example: "enters step 2 at t0, no
+      event for 49 hours: exactly one stall")
+- [x] each fires exactly once per episode; a returning user resets it — proven twice:
+      in the engine (the same episode yields the same key, a return yields a new one)
+      and against the database, where the unique index refuses the second insert
+- [x] none fires for a paid, deleted or opted-out user — driven over every per-person
+      leak, so a tenth leak that forgot the guard would fail the test; and checked
+      again over a 250-person simulator run that contains real payers
+- [x] the collapse test fires only when ≥ 10 completions were expected and p < 0.01
+      (including the case the minimum-volume check exists for: the same halving is
+      noise on a 12-a-day step and an outage on a 1,200-a-day one)
+- [x] the simulator report prints the share of stalled users caught — **100.0%**,
+      91 of 91
+- [x] a leak lacking the paid event or trial dates shows as off, with its reason
+
+Also measured on that run: 13.8% of first-ever pricing views are quick exits (28 of
+203), split by source, device, country and trial day; and every per-person leak
+reports its potential revenue with the formula beside it.
 
 ## M9 · Dashboard, masking and entitlements — `[ ]`
 

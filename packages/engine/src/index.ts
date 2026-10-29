@@ -193,6 +193,63 @@ export type {
   WeightSuggestion,
 } from './intent/calibration.js';
 
+// --- M8: leaks (brief §8.3) -------------------------------------------------
+export {
+  LEAK_TYPES,
+  LEAK_SUBJECTS,
+  LEAK_REQUIREMENTS,
+  LEAK_DEFINITIONS,
+  LEAK_DEFINITIONS_BY_TYPE,
+  REQUIREMENT_REASONS,
+  unavailableLeaks,
+  leakIsAvailable,
+} from './leaks/types.js';
+export type {
+  LeakType,
+  LeakSubjectKind,
+  LeakRequirement,
+  LeakDefinition,
+  LeakFinding,
+  LeakUnavailable,
+} from './leaks/types.js';
+
+export {
+  poissonCdf,
+  collapseTest,
+  COLLAPSE_P_THRESHOLD,
+  COLLAPSE_MIN_EXPECTED,
+  COLLAPSE_WINDOW_HOURS,
+  COLLAPSE_BASELINE_DAYS,
+} from './leaks/poisson.js';
+export type { CollapseTest } from './leaks/poisson.js';
+
+export {
+  userLeaks,
+  onboardingStalls,
+  lastMomentDrop,
+  highIntentQuiet,
+  trialEndedUnpaid,
+  limitReachedNoUpgrade,
+  cancelledOrFailed,
+  payerGoingQuiet,
+  pricingQuickExit,
+  stepCollapse,
+  suppressed,
+  USER_LEAK_TYPES,
+  LAST_MOMENT_HOURS,
+  WENT_QUIET_DAYS,
+  LIMIT_UPGRADE_DAYS,
+  PAYER_QUIET_RATIO,
+  PAYER_QUIET_WEEKS,
+  PAYER_BASELINE_WEEKS,
+} from './leaks/rules.js';
+export type {
+  UserLeakFacts,
+  StepLeakFact,
+  StepCollapseFact,
+  SubjectGuards,
+} from './leaks/rules.js';
+
 export { suggestMappings, parseSuggestions, CONFIDENCES, MAX_ATTEMPTS } from './mapping/suggest.js';
 export type {
   Ask,

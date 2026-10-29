@@ -26,6 +26,27 @@ export type { DictionaryFactsResult } from './dictionary-facts.js';
 export { runSuggestions, promptInputFrom } from './suggest-run.js';
 export type { SuggestionRun } from './suggest-run.js';
 
+// --- M8: leaks (brief §8.3) -------------------------------------------------
+export {
+  loadUserLeakFacts,
+  loadCollapseFacts,
+  leakAvailability,
+  isTrialCheckout,
+  LEAK_EVENTS,
+} from './leaks/facts.js';
+export {
+  sweepUserLeaks,
+  sweepStepCollapse,
+  recordFindings,
+  resolveLeaks,
+  leakSummary,
+  quickExitRates,
+  writeLeakSummary,
+  runLeakSweep,
+  runCollapseSweep,
+} from './leaks/sweeps.js';
+export type { SweepResult, LeakSummary, QuickExitRates } from './leaks/sweeps.js';
+
 // --- M6: the funnel and timing jobs (brief §8.1) ----------------------------
 export {
   loadStepDefinitions,

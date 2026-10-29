@@ -3,12 +3,15 @@ import { loadRootEnv } from '@dripmetric/db/admin';
 import {
   pendingRecomputeProjects,
   recomputeChunk,
+  runCollapseSweep,
   runFunnelDaily,
   runFunnelHourly,
   runIntentDaily,
   runIntentRefresh,
+  runLeakSweep,
+  writeLeakSummary,
 } from '@dripmetric/ingest';
-import { projectsWithFunnels } from '@dripmetric/db';
+import { projectsWithFunnels, withProject } from '@dripmetric/db';
 import { QUEUE_POLICIES, QUEUES, startQueue, type Queue } from './queue.js';
 import { log } from './log.js';
 
@@ -60,10 +63,46 @@ async function main(): Promise<void> {
     }
   });
 
-  await queue.work(QUEUES.sweepLeaks, async () => {
-    // M8. Every 5 minutes, over every project.
-    log.debug('sweep-leaks tick');
+  /*
+   * The leak sweeps (brief §8.3, M8).
+   *
+   * Every five minutes for the per-person leaks, hourly for the step-completion
+   * collapse. Recording a finding is an insert that ignores conflicts, so running a
+   * sweep more often than needed costs a query and changes nothing — which is what
+   * makes these safe to retry.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.sweepLeaks, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runLeakSweep(job.data.projectId, new Date());
+      if (result.recorded > 0) {
+        log.info('leaks found', {
+          projectId: job.data.projectId,
+          recorded: result.recorded,
+          byType: result.byType,
+        });
+      }
+      // A leak that cannot run is worth saying out loud once a sweep, not never.
+      for (const off of result.off) {
+        log.debug('leak off', {
+          projectId: job.data.projectId,
+          leak: off.type,
+          missing: off.missing,
+        });
+      }
+    }
   });
+
+  await queue.work<{ projectId: number }>(QUEUES.checkCollapse, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runCollapseSweep(job.data.projectId, new Date());
+      if (result.recorded > 0) {
+        log.info('step collapse', { projectId: job.data.projectId, recorded: result.recorded });
+      }
+    }
+  });
+
+  await queue.work(QUEUES.leakSweepFanOut, () => fanOut(queue, QUEUES.sweepLeaks, 'leaks'));
+  await queue.work(QUEUES.collapseFanOut, () => fanOut(queue, QUEUES.checkCollapse, 'collapse'));
 
   /*
    * The recompute job (brief §7, CLAUDE.md rule 10).
@@ -111,6 +150,8 @@ async function main(): Promise<void> {
       const now = new Date();
       await runFunnelDaily(job.data.projectId, now);
       const calibration = await runIntentDaily(job.data.projectId, now);
+      // The leak section of the daily summary, beside the funnel's and intent's.
+      await withProject(job.data.projectId, (db) => writeLeakSummary(db, now), { worker: true });
       log.info('daily done', {
         projectId: job.data.projectId,
         calibrationReady: calibration.ready,
@@ -132,8 +173,9 @@ async function main(): Promise<void> {
   });
   await queue.work(QUEUES.dailySummariesSweep, () => fanOut(queue, QUEUES.dailySummaries, 'daily'));
 
-  // Every 5 minutes. Real cron with time zones arrives with the jobs that need them.
-  await queue.schedule(QUEUES.sweepLeaks, '*/5 * * * *');
+  // Every 5 minutes, and hourly for the collapse test (brief §8.3).
+  await queue.schedule(QUEUES.leakSweepFanOut, '*/5 * * * *');
+  await queue.schedule(QUEUES.collapseFanOut, '23 * * * *');
   // A few minutes past the hour, so a step entered at 09:59 is in the 09:00 bucket.
   await queue.schedule(QUEUES.funnelSweep, '7 * * * *');
   /*

@@ -108,3 +108,65 @@ export async function latestBrowserSession(db: ScopedDb, userKey: number): Promi
   );
   return row?.id ?? null;
 }
+
+/**
+ * What a batch adds to a session's running totals.
+ *
+ * Brief §4 describes a session row as "start, end, active seconds, page count", and
+ * ingest only ever wrote the start. Three things were missing as a result:
+ *
+ *  - `ended_at` was always null, so the pricing quick-exit rule — which needs "the
+ *    session ends within 2 minutes" — could never fire at all. The simulator
+ *    reported 0 quick exits out of 406 first-ever pricing views.
+ *  - `active_seconds` and `page_count` were always zero, so a session's depth was
+ *    unreadable even though every Page Left carries the numbers.
+ *
+ * `ended_at` is the last event we have seen in the session. That is the honest
+ * definition: a session has no end event, only a last one, and the sweeps run after
+ * the fact so by the time a rule reads it the session really is over.
+ */
+export interface SessionTotals {
+  lastEventAt: Date;
+  pageViews: number;
+  activeSeconds: number;
+}
+
+export type SessionTotalsMap = Map<number, SessionTotals>;
+
+export function addToSession(
+  totals: SessionTotalsMap,
+  sessionId: number,
+  at: Date,
+  options: { pageView?: boolean; activeSeconds?: number } = {},
+): void {
+  const entry = totals.get(sessionId) ?? { lastEventAt: at, pageViews: 0, activeSeconds: 0 };
+  if (at > entry.lastEventAt) entry.lastEventAt = at;
+  if (options.pageView === true) entry.pageViews += 1;
+  if (options.activeSeconds !== undefined && options.activeSeconds > 0) {
+    entry.activeSeconds += Math.round(options.activeSeconds);
+  }
+  totals.set(sessionId, entry);
+}
+
+/** One statement per batch, like the other counters. */
+export async function flushSessionTotals(db: ScopedDb, totals: SessionTotalsMap): Promise<void> {
+  if (totals.size === 0) return;
+  const ids = [...totals.keys()];
+
+  await db.exec(
+    `UPDATE sessions SET
+       ended_at = GREATEST(sessions.ended_at, t.last_event_at),
+       page_count = sessions.page_count + t.page_views,
+       active_seconds = sessions.active_seconds + t.active_seconds
+     FROM unnest($2::bigint[], $3::timestamptz[], $4::int[], $5::int[])
+          AS t(id, last_event_at, page_views, active_seconds)
+     WHERE sessions.project_id = $1 AND sessions.id = t.id`,
+    [
+      db.projectId,
+      ids,
+      ids.map((id) => totals.get(id)!.lastEventAt),
+      ids.map((id) => totals.get(id)!.pageViews),
+      ids.map((id) => totals.get(id)!.activeSeconds),
+    ],
+  );
+}

@@ -152,6 +152,10 @@ export const QUEUES = {
   dailySummariesSweep: 'daily-summaries-sweep',
   /** Hourly: the step-completion collapse test (M8). */
   checkCollapse: 'check-collapse',
+  /** Every 5 minutes, fanning out: which projects to sweep for leaks (M8). */
+  leakSweepFanOut: 'leak-sweep-fan-out',
+  /** Hourly, fanning out: the same, for the collapse test (M8). */
+  collapseFanOut: 'collapse-fan-out',
   /** Nightly: summaries first, then the retention deletes (M11). */
   dailySummaries: 'daily-summaries',
   /** Monday morning in the founder's timezone: the weekly leak report (M10). */
@@ -178,6 +182,11 @@ export const QUEUE_POLICIES: Partial<Record<string, QueuePolicy>> = {
   [QUEUES.recomputeSweep]: 'short',
   [QUEUES.funnelSweep]: 'short',
   [QUEUES.dailySummariesSweep]: 'short',
+  // One pending sweep per project: a second would find the same leaks.
+  [QUEUES.sweepLeaks]: 'short',
+  [QUEUES.checkCollapse]: 'short',
+  [QUEUES.leakSweepFanOut]: 'short',
+  [QUEUES.collapseFanOut]: 'short',
   // One pending aggregate per project: two would recompute the same rows.
   [QUEUES.funnelHourly]: 'short',
   [QUEUES.dailySummaries]: 'short',

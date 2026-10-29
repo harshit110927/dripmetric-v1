@@ -31,7 +31,13 @@ import {
   resolveUserKey,
   type ResolvedUser,
 } from './identity.js';
-import { ensureSession, latestBrowserSession } from './sessions.js';
+import {
+  addToSession,
+  ensureSession,
+  flushSessionTotals,
+  latestBrowserSession,
+  type SessionTotalsMap,
+} from './sessions.js';
 import {
   readDailyCounts,
   recordMonthlyActive,
@@ -104,6 +110,8 @@ export interface PipelineState {
   sessions: Map<string, number>;
   /** `${userKey}:${month}` — a person is recorded once per month, not once per event. */
   monthlyActive: Set<string>;
+  /** Per session: its last event, page views and active seconds, flushed once. */
+  sessionTotals: SessionTotalsMap;
   /**
    * `${day}:${userKey}:${nameId}` — `base` is what the database already held and
    * `batch` is what this batch added, INCLUDING the rows that went over the cap.
@@ -124,6 +132,7 @@ export function newPipelineState(): PipelineState {
     users: new Map(),
     anons: new Map(),
     sessions: new Map(),
+    sessionTotals: new Map(),
     monthlyActive: new Set(),
     arrivedToday: new Map(),
     funnel: null,
@@ -288,6 +297,23 @@ export async function prepareForWrite(
   const props =
     message.type === 'track' || message.type === 'page' ? (message.properties ?? null) : null;
 
+  /*
+   * The session's running totals (brief §4).
+   *
+   * Counted from what ARRIVED, before the daily cap below, for the same reason the
+   * daily counters are: a session that went over the cap still had those page views,
+   * and a session whose last event was capped still ended when it ended.
+   */
+  if (sessionId !== null) {
+    addToSession(state.sessionTotals, sessionId, prepared.occurredAt, {
+      pageView: rawName === 'Page Viewed',
+      activeSeconds:
+        rawName === 'Page Left' && typeof props?.['activeSeconds'] === 'number'
+          ? props['activeSeconds']
+          : 0,
+    });
+  }
+
   // --- The daily cap (brief section 4) -----------------------------------------
   if (userKey !== null) {
     const day = prepared.occurredAt.toISOString().slice(0, 10);
@@ -439,6 +465,7 @@ async function writeCounters(
   project: ProjectContext,
 ): Promise<void> {
   await flushNameCounts(db, state.nameCounts);
+  await flushSessionTotals(db, state.sessionTotals);
 
   await recordMonthlyActive(
     db,

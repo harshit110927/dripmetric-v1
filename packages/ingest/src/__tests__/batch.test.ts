@@ -651,3 +651,96 @@ describe('a page message carrying an event name', () => {
     expect(rows[0]!.active).toBe('95');
   });
 });
+
+/**
+ * Brief §4 describes a session row as "start, end, active seconds, page count", and
+ * ingest only ever wrote the start. `ended_at` was always null, `active_seconds` and
+ * `page_count` always zero.
+ *
+ * The pricing quick-exit rule needs "the session ends within 2 minutes" (brief §8.2),
+ * so with no end time it could never fire: the simulator reported 0 quick exits out
+ * of 406 first-ever pricing views until this was fixed.
+ */
+describe('a session’s running totals', () => {
+  beforeAll(ensureMigrated, 60_000);
+  beforeEach(resetData);
+  afterAll(closePools);
+
+  it('records the end, the page count and the active seconds', async () => {
+    const { project, publishableKey } = await newFixture();
+    const base = Date.now() - 60 * 60_000;
+    const at = (seconds: number) => new Date(base + seconds * 1000).toISOString();
+
+    const view = (path: string, seconds: number) => ({
+      type: 'page',
+      messageId: `pv-${path}-${seconds}`,
+      anonymousId: 'anon-1',
+      timestamp: at(seconds),
+      properties: { path },
+      context: { page: { path }, sessionId: 's-1' },
+    });
+    const leave = (path: string, seconds: number, activeSeconds: number) => ({
+      type: 'page',
+      name: 'Page Left',
+      messageId: `pl-${path}-${seconds}`,
+      anonymousId: 'anon-1',
+      timestamp: at(seconds),
+      properties: { path, activeSeconds, pageViewId: `${path}-${seconds}` },
+      context: { page: { path }, sessionId: 's-1' },
+    });
+
+    // Two pages in one session, in two batches, so the totals have to accumulate
+    // across batches rather than within one.
+    await postBatch([view('/', 0), leave('/', 30, 28)], {
+      key: publishableKey,
+      userAgent: BROWSER_UA,
+    });
+    await postBatch([view('/pricing', 40), leave('/pricing', 95, 52)], {
+      key: publishableKey,
+      userAgent: BROWSER_UA,
+    });
+
+    const session = await withProject(project.live.id, (db) =>
+      db.one<{ page_count: number; active_seconds: number; ended_at: Date; started_at: Date }>(
+        `SELECT page_count, active_seconds, ended_at, started_at
+           FROM sessions WHERE project_id = $1`,
+        [db.projectId],
+      ),
+    );
+
+    expect(session.page_count).toBe(2);
+    expect(session.active_seconds).toBe(80);
+    // The end is the last event we have seen in the session.
+    expect(session.ended_at.toISOString()).toBe(at(95));
+    expect(session.ended_at.getTime()).toBeGreaterThan(session.started_at.getTime());
+  });
+
+  it('never moves a session’s end backwards when a late event arrives', async () => {
+    const { project, publishableKey } = await newFixture();
+    const base = Date.now() - 60 * 60_000;
+    const at = (seconds: number) => new Date(base + seconds * 1000).toISOString();
+
+    const page = (id: string, seconds: number) => ({
+      type: 'page',
+      messageId: id,
+      anonymousId: 'anon-2',
+      timestamp: at(seconds),
+      properties: { path: '/' },
+      context: { page: { path: '/' }, sessionId: 's-2' },
+    });
+
+    await postBatch([page('late-second', 300)], { key: publishableKey, userAgent: BROWSER_UA });
+    await postBatch([page('late-first', 10)], { key: publishableKey, userAgent: BROWSER_UA });
+
+    const session = await withProject(project.live.id, (db) =>
+      db.one<{ ended_at: Date; page_count: number }>(
+        `SELECT ended_at, page_count FROM sessions WHERE project_id = $1`,
+        [db.projectId],
+      ),
+    );
+
+    // GREATEST, so an event that arrives late cannot shorten the session.
+    expect(session.ended_at.toISOString()).toBe(at(300));
+    expect(session.page_count).toBe(2);
+  });
+});
