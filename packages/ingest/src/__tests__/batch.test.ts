@@ -13,6 +13,10 @@ import {
   type Fixture,
 } from './helpers.js';
 
+/** A real browser's user agent: a curl-shaped one is correctly filtered as a bot. */
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36';
+
 /**
  * M1 exit checks (brief section 11), one test each. Every assertion here is a line
  * from the brief, so a failure says which promise broke.
@@ -526,5 +530,124 @@ describe('POST /v1/batch', () => {
       ),
     );
     expect(rows).toHaveLength(2); // two people, one row each, not one per event
+  });
+});
+
+/**
+ * The browser SDK sends a page LEAVE as `{type: 'page', name: 'Page Left'}` with the
+ * running totals attached (brief §6, `packages/sdk/src/browser/client.ts`).
+ *
+ * Ingest used to ignore that `name` and store every page message as `Page Viewed`,
+ * which was wrong in three ways at once and shipped from M1 to M7:
+ *
+ *  - no `Page Left` was ever recorded from the SDK, so step timing's active seconds
+ *    and the pricing attention time were unreachable, and the intent engine's
+ *    pricing signals could not fire at all;
+ *  - `updatePageLeftTotals` never ran, so a repeat page leave was dropped as a
+ *    duplicate instead of raising the totals — and a page leave's messageId is
+ *    deterministic (`pl-<pageViewId>`) precisely so it can be re-sent;
+ *  - every page view was counted twice, once for the view and once for the leave.
+ */
+describe('a page message carrying an event name', () => {
+  beforeAll(ensureMigrated, 60_000);
+  beforeEach(resetData);
+  afterAll(closePools);
+
+  it('stores Page Left as Page Left, not as a second Page Viewed', async () => {
+    const { project, publishableKey } = await newFixture();
+
+    await postBatch(
+      [
+        {
+          type: 'page',
+          messageId: 'pv-1',
+          anonymousId: 'anon-1',
+          properties: { path: '/pricing' },
+          context: { page: { path: '/pricing' }, sessionId: 's-1' },
+        },
+        {
+          type: 'page',
+          name: 'Page Left',
+          messageId: 'pl-1',
+          anonymousId: 'anon-1',
+          properties: { path: '/pricing', activeSeconds: 42, deepestScroll: 80, pageViewId: 'pv1' },
+          context: { page: { path: '/pricing' }, sessionId: 's-1' },
+        },
+      ],
+      { key: publishableKey, userAgent: BROWSER_UA },
+    );
+
+    const rows = await withProject(project.live.id, (db) =>
+      db.query<{ raw_name: string; active: string | null }>(
+        `SELECT n.raw_name, e.props->>'activeSeconds' AS active
+           FROM events e
+           JOIN event_names n ON n.project_id = e.project_id AND n.id = e.name_id
+          WHERE e.project_id = $1
+          ORDER BY n.raw_name`,
+        [db.projectId],
+      ),
+    );
+
+    expect(rows.map((r) => r.raw_name)).toEqual(['Page Left', 'Page Viewed']);
+    expect(rows[0]!.active).toBe('42');
+  });
+
+  it('keeps a Segment page NAME as a page view, with the name in its properties', async () => {
+    // Segment's `page` call uses `name` for the page's name, not an event name
+    // (settled decision 11), so "Pricing" must not become an event called Pricing.
+    const { project, publishableKey } = await newFixture();
+
+    await postBatch(
+      [
+        {
+          type: 'page',
+          name: 'Pricing',
+          messageId: 'seg-1',
+          anonymousId: 'anon-2',
+          properties: { path: '/pricing' },
+          context: { page: { path: '/pricing' }, sessionId: 's-2' },
+        },
+      ],
+      { key: publishableKey, userAgent: BROWSER_UA },
+    );
+
+    const names = await withProject(project.live.id, (db) =>
+      db.query<{ raw_name: string }>(
+        `SELECT n.raw_name FROM events e
+           JOIN event_names n ON n.project_id = e.project_id AND n.id = e.name_id
+          WHERE e.project_id = $1`,
+        [db.projectId],
+      ),
+    );
+    expect(names.map((n) => n.raw_name)).toEqual(['Page Viewed']);
+  });
+
+  it('raises the totals when a page leave is re-sent, rather than dropping it', async () => {
+    const { project, publishableKey } = await newFixture();
+    const leave = (activeSeconds: number) => ({
+      type: 'page',
+      name: 'Page Left',
+      // Deterministic per page view, so the server updates instead of deduping.
+      messageId: 'pl-same',
+      anonymousId: 'anon-3',
+      properties: { path: '/pricing', activeSeconds, pageViewId: 'pv-same' },
+      context: { page: { path: '/pricing' }, sessionId: 's-3' },
+    });
+
+    await postBatch([leave(10)], { key: publishableKey, userAgent: BROWSER_UA });
+    await postBatch([leave(95)], { key: publishableKey, userAgent: BROWSER_UA });
+
+    const rows = await withProject(project.live.id, (db) =>
+      db.query<{ count: string; active: string | null }>(
+        `SELECT count(*)::text AS count, max(e.props->>'activeSeconds') AS active
+           FROM events e
+           JOIN event_names n ON n.project_id = e.project_id AND n.id = e.name_id
+          WHERE e.project_id = $1 AND n.raw_name = 'Page Left'`,
+        [db.projectId],
+      ),
+    );
+
+    expect(rows[0]!.count).toBe('1');
+    expect(rows[0]!.active).toBe('95');
   });
 });

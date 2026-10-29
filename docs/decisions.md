@@ -901,3 +901,145 @@ It was found by M6's funnel work, which cares about ordering. Fixtures that need
 order now derive their timestamps from the real clock going backwards, and the comment
 says why. A fixed timestamp in a test is only safe if it is in the past of every future
 run, which a date typed today is not.
+
+### 2026-10-29 · Signals stored as evidence with no points yet
+
+Brief §8.2: "Signals in Appendix A that have no value in this table … are stored as
+evidence and add 0 points until calibration. Do not invent points; list them in
+`docs/decisions.md`." The list, as required:
+
+`Plan Selected`, `Evaluation Page Viewed`, `Trial Extension Requested`,
+`Upgrade Prompt Clicked`, `Plan Limit Approached`, `Trial Started`, `Signed In`,
+`Data Exported`, and the computed signals the catalog itself marks as not needed yet
+(`day1Return`, `breadth`, `depthAgainstPayers`, `devicesUsed`, `channelQuality`,
+`ownerQuietTeamActive`).
+
+They are stored and visible on a timeline, and they carry zero points. The same list
+is in `ZERO_POINT_EVIDENCE` in `packages/engine/src/intent/points.ts`, so a reader of
+the code can see the omission is deliberate rather than an oversight.
+
+One of them is used without being scored: `Plan Selected` is read as the "plan click"
+input to the pricing-deliberation rule. That is not points of its own — the +10 is the
+`pricingDeliberation` row of the table — it is evidence feeding a rule the brief
+already defines.
+
+### 2026-10-29 · Brand search is an approximation, and here is exactly which one
+
+Brief §8.2 asks for this to be said in the docs, so: we cannot see that someone
+searched for the product by name. Search engines send a referrer without the query,
+and that is not going to change.
+
+Two observable things stand in for it, both in the `reviewOrBrandSearch` fit point:
+
+- the founder's own `brandTerms` matched against `utm_term`, which works only for
+  traffic the founder tagged themselves;
+- the referrer's registrable domain matched against a list of review and comparison
+  sites (`REVIEW_SITE_DOMAINS` in `packages/catalog`: G2, Capterra, GetApp,
+  TrustRadius, AlternativeTo and similar), which is the same intent arriving by a
+  different road.
+
+It is +5, capped with the other fit points at +10 in total, so an approximation can
+never carry a score on its own.
+
+### 2026-10-29 · A `page` message's name was ignored, since M1
+
+The browser SDK sends a page LEAVE as `{type: 'page', name: 'Page Left'}` with the
+running totals attached (brief §6). Ingest read `message.event` for a track and used
+the literal `'Page Viewed'` for everything else, so the name was dropped.
+
+Three consequences, all shipped from M1 until M7 found them:
+
+- No `Page Left` was ever stored from the SDK. Step timing's active seconds and the
+  pricing attention time were therefore unreachable, and M6's `updatePageLeftTotals`
+  was dead code in practice — a page leave's `messageId` is deterministic
+  (`pl-<pageViewId>`) precisely so a re-send can raise the totals, and instead it was
+  dropped as a duplicate.
+- Every page view was counted twice: once for the view, once for the leave.
+- The intent engine's pricing signals could not fire at all, which is how it surfaced:
+  `pricingDeliberation` was true for 0 of 281 simulated users, in a run where a third
+  of them deliberate on pricing for 40 to 200 seconds.
+
+Fixed by treating a page message's `name` as an event name when it is one of ours.
+Segment's `page` call uses `name` for the PAGE's name ("Pricing"), not an event name,
+so only a name in our own catalog is read that way — a Segment page named "Pricing"
+stays a `Page Viewed` (settled decision 11). Three regression tests cover it, and two
+of them were confirmed to fail against the old line.
+
+### 2026-10-29 · The pricing +10 is a test on the time, not on the pattern
+
+`pricingViewed` was computed as "the view was not a quick exit and not a slow page",
+which quietly gave the +10 to a `re-checking` view — and brief §8.2 defines that as "a
+view under 10 seconds by someone who has seen pricing before". A two-second glance by
+a returning visitor scored the same as someone who read the page.
+
+It is now the rule as written: active time at or above the attention bar, which is ten
+seconds until the product has 50 pricing views and its own 25th percentile after that.
+
+### 2026-10-29 · The peak is replayed from events, not accumulated
+
+The brief says the peak is "updated whenever an event is ingested". It is instead
+replayed from when each signal first became true, and the incremental `updatePeak`
+that existed for an afternoon was deleted rather than kept beside it.
+
+Two reasons. A stored peak that could only be maintained forward would be lost the
+first time a mapping changed, and derived state has to be rebuildable (CLAUDE.md rule
+10). And `first_high_at` has to be a fact about the past: it is the clock "intent but
+didn't pay" counts from, and the calibration asks whether someone crossed 60 _before_
+they paid — a timestamp stamped whenever a refresh happened to run cannot answer
+that, and on a first run over months of history it would stamp everyone with today.
+
+`activeThreeOfSeven` is deliberately left out of the replay. It is a statement about
+the present, so including it would make the date someone crossed 60 last March depend
+on whether they logged in this week.
+
+Keeping both implementations would have been the drift risk this codebase has already
+been bitten by twice (ingest against recompute, the engine against SQL percentiles).
+
+### 2026-10-29 · The peak is written, not raised with GREATEST
+
+`GREATEST(stored, new)` looks safer and is worse. If a mapping changes and a signal
+turns out never to have applied, the peak has to come DOWN, and a monotonic column
+would keep the old number for ever with nothing to explain it. The replay is the
+single source of the number, so the refresh simply writes what it computed.
+
+### 2026-10-29 · 89.2% on "shows intent, then leaves", and why not 90
+
+The brief asks for at least 90% on the simulator "and explain any shortfall". The
+measured figure is 89.2% — 58 of 65 — and the explanation is precise: the other 7 peak
+at exactly 55, from activating (25), reading pricing (10), deliberating over the plans
+(10) and doing the core action three times in their first fortnight (10). They have no
+fit points, did not activate faster than the median, and were not active on three of
+the last seven days. They are five points below the band.
+
+That is the points table doing what it says. Brief §8.2 is explicit — "Do not invent
+points" — and raising a weight to clear a bar on simulated data would be fitting the
+rules to the simulator rather than to users. The calibration job exists for exactly
+this question: on this run it already suggests raising `fastActivation` and
+`fitPoints`, for a founder to approve.
+
+The test asserts 85% so a real regression fails it — the same check read 49.2% before
+the two bugs above were fixed — without encoding a number only reachable by inventing
+points.
+
+### 2026-10-29 · Intent is refreshed per project, not per person
+
+The ingest pipeline already collects a `recompute-intent` follow-up per person per
+batch, and the worker's handler ignores the person and refreshes the project.
+
+The facts for every user come from one query over the project's events, so a thousand
+per-person passes would be a thousand copies of the same work. The per-person path
+stays unconnected until a score has to be fresh within seconds rather than within the
+hour, which is a dashboard question (M9), not an ingest one.
+
+### 2026-10-29 · The deliberation interactions the settled catalog can see
+
+Brief §8.2 lists "the annual toggle, a plan click or the FAQ opened" as pricing
+deliberation. Of the three, only the plan click has an event in the settled catalog:
+`Plan Selected`. The annual toggle and the FAQ have none, and the catalog is closed
+(settled decision 16), so they are not observable unless a founder sends and maps
+their own event.
+
+Deliberation therefore rests on the plan click, on active time above the product's own
+median for pricing, and on a second proper visit within a week — all three of which
+real data carries. `classifyPricingView` keeps the toggle and FAQ as inputs so a
+founder who does map such an event gets them without a code change.

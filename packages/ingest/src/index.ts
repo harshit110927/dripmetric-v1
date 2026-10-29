@@ -44,6 +44,20 @@ export {
   SKIMMED_WINDOW_SECONDS,
 } from './funnel/facts.js';
 export type { LifecycleFact } from './funnel/facts.js';
+// --- M7: intent (brief §8.2) ------------------------------------------------
+export { loadIntentFacts, INTENT_EVENTS, TRIAL_CHECKOUT_TYPE } from './intent/facts.js';
+export type { ProjectIntentContext, UserIntentFacts, IntentFactsResult } from './intent/facts.js';
+export {
+  refreshIntentState,
+  intentSummary,
+  intentContextFor,
+  runCalibration,
+  runIntentRefresh,
+  runIntentDaily,
+  writeIntentSummary,
+} from './intent/state.js';
+export type { IntentSummary } from './intent/state.js';
+
 export {
   funnelFactsFor,
   currentFunnelReport,

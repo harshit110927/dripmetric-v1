@@ -5,6 +5,8 @@ import {
   recomputeChunk,
   runFunnelDaily,
   runFunnelHourly,
+  runIntentDaily,
+  runIntentRefresh,
 } from '@dripmetric/ingest';
 import { projectsWithFunnels } from '@dripmetric/db';
 import { QUEUE_POLICIES, QUEUES, startQueue, type Queue } from './queue.js';
@@ -43,10 +45,19 @@ async function main(): Promise<void> {
   }
   log.info('queues ready', { queues: Object.values(QUEUES) });
 
-  // A round-trip handler, so M1 can prove the queue actually works end to end.
-  await queue.work<{ projectId: number; userKey: number }>(QUEUES.recomputeIntent, async (jobs) => {
-    log.debug('recompute-intent', { count: jobs.length });
-    // The engine lands at M7. Until then this only proves delivery.
+  /*
+   * The intent engine (brief §8.2, M7).
+   *
+   * One pass per project rather than one per person: the facts come from a single
+   * query over the project's events, so a thousand per-person passes would be a
+   * thousand copies of the same work. The per-person follow-up the ingest pipeline
+   * already collects stays unconnected until a score has to be fresh within seconds.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.recomputeIntent, async (jobs) => {
+    for (const job of jobs) {
+      const users = await runIntentRefresh(job.data.projectId, new Date());
+      log.debug('intent refreshed', { projectId: job.data.projectId, users });
+    }
   });
 
   await queue.work(QUEUES.sweepLeaks, async () => {
@@ -97,8 +108,16 @@ async function main(): Promise<void> {
 
   await queue.work<{ projectId: number }>(QUEUES.dailySummaries, async (jobs) => {
     for (const job of jobs) {
-      await runFunnelDaily(job.data.projectId, new Date());
-      log.info('funnel daily done', { projectId: job.data.projectId });
+      const now = new Date();
+      await runFunnelDaily(job.data.projectId, now);
+      const calibration = await runIntentDaily(job.data.projectId, now);
+      log.info('daily done', {
+        projectId: job.data.projectId,
+        calibrationReady: calibration.ready,
+        payers: calibration.payers,
+      });
+      // The brief asks for the calibration report to be printed (brief §8.2, §11).
+      if (calibration.ready) for (const line of calibration.lines) log.info(line);
     }
   });
 
@@ -107,7 +126,10 @@ async function main(): Promise<void> {
    * no data of its own: the queue name is the only thing that can say which pass
    * this is.
    */
-  await queue.work(QUEUES.funnelSweep, () => fanOut(queue, QUEUES.funnelHourly, 'hourly'));
+  await queue.work(QUEUES.funnelSweep, async () => {
+    await fanOut(queue, QUEUES.funnelHourly, 'hourly');
+    await fanOut(queue, QUEUES.recomputeIntent, 'intent');
+  });
   await queue.work(QUEUES.dailySummariesSweep, () => fanOut(queue, QUEUES.dailySummaries, 'daily'));
 
   // Every 5 minutes. Real cron with time zones arrives with the jobs that need them.

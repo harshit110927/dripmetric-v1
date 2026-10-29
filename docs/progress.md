@@ -142,17 +142,28 @@ Also built: `user_step_sessions`, which makes `visits` an absolute recount inste
 a per-batch counter that undercounted every returning visitor, and gives the segment
 splits the session a person was actually in.
 
-## M7 · Intent engine — `[ ]`
+## M7 · Intent engine — `[x]`
 
 **Build:** brief §8.2: signals and points, decay, peak, bands, accounts, the calibration
 job, per-project config, "intent but didn't pay", a potential-revenue function that returns
 its formula text.
 
-- [ ] a fixture test for every row of the points table, incl. the fit cap, the clamp at 0, shared signals
-- [ ] a decay test
-- [ ] replaying events twice gives identical scores
-- [ ] the simulator report prints the share of "shows intent, then leaves" users who reached 60
-- [ ] the calibration job prints recall, precision and lift on a product with ≥ 30 payers
+- [x] a fixture test for every row of the points table, incl. the fit cap, the clamp
+      at 0, shared signals (`intent-score.test.ts`: the table drives the cases, so a
+      row cannot be added without one; the cap drops the extras and says which; the
+      shared pairs are one column each, so counting twice is unexpressible)
+- [x] a decay test (0, 7, 14, 21 and 28 quiet days; a half-week; and the cap applied
+      before the decay rather than after, which is the difference between 50 and 55)
+- [x] replaying events twice gives identical scores — byte-identical `intent_state`
+      rows over a 300-person run, because the peak and `first_high_at` are replayed
+      from when each signal became true rather than stamped when a refresh ran
+- [x] the simulator report prints the share of "shows intent, then leaves" users who
+      reached 60 — **89.2%** (58 of 65). The other 7 peak at exactly 55 and the
+      shortfall is printed with them; see `docs/decisions.md`. Two bugs found on the
+      way: the same figure read 49.2% before them.
+- [x] the calibration job prints recall, precision and lift on a product with ≥ 30
+      payers — 50 payers of 281 users: recall 100.0%, precision 61.0%, a lift per
+      signal, and two weight changes offered for approval and never applied
 
 ## M8 · Leak engine — `[ ]`
 

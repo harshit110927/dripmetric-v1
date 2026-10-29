@@ -1,5 +1,6 @@
 import {
   CATALOG_EVENTS_BY_NAME,
+  isCanonicalEventName,
   SERVER_ONLY_EVENT_NAMES,
   SERVER_ONLY_TRAITS,
   type MessageInput,
@@ -267,7 +268,10 @@ export async function prepareForWrite(
   }
 
   // --- Step 7: map the event name through the dictionary -----------------------
-  const rawName = message.type === 'track' ? message.event : 'Page Viewed';
+  const rawName =
+    message.type === 'track'
+      ? message.event
+      : pageEventName(message.type === 'page' ? message.name : undefined);
 
   // Billing events travel through this same API until the Stripe connector exists
   // (brief section 5), so they are tagged `billing` by name rather than by path.
@@ -460,6 +464,29 @@ async function writeCounters(
 
 function markMonthlyActive(state: PipelineState, userKey: number, at: Date): void {
   state.monthlyActive.add(`${userKey}|${at.toISOString().slice(0, 7)}-01`);
+}
+
+/**
+ * What a `page` message is called.
+ *
+ * Our own browser SDK sends a page LEAVE as `{type: 'page', name: 'Page Left'}` with
+ * the running totals attached (brief §6), and this function is what reads the name.
+ * Before it existed every page message was stored as `Page Viewed`, so:
+ *
+ *  - no `Page Left` was ever recorded from the SDK, which made step timing's active
+ *    seconds and the pricing attention time unreachable, and left
+ *    `updatePageLeftTotals` dead in practice — a repeat page leave was dropped as a
+ *    duplicate (its messageId is deterministic) instead of raising the totals;
+ *  - and every page view was counted twice, once for the view and once for the leave.
+ *
+ * Segment's `page` call uses `name` for the PAGE's name ("Pricing"), not an event
+ * name, so only a name that is actually in our catalog is treated as an event. A
+ * Segment page named "Pricing" stays a `Page Viewed` with its name in the properties,
+ * which is what a Segment user expects (settled decision 11).
+ */
+function pageEventName(name: string | undefined): string {
+  if (name !== undefined && isCanonicalEventName(name)) return name;
+  return 'Page Viewed';
 }
 
 function isInternal(email: string, project: ProjectContext): boolean {
