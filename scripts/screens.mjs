@@ -194,10 +194,21 @@ async function waitForServer() {
 async function main() {
   await mkdir(screensDir, { recursive: true });
 
-  // `next start` serves a build; without one it exits with a message that is easy to
-  // miss behind the server's own noise.
+  /*
+   * `next start` serves a build; without one it exits with a message that is easy to
+   * miss behind the server's own noise.
+   *
+   * This check caught a real hole rather than a missing step. The root `build` script
+   * used to filter to `./packages/**`, so `next build` never ran in CI — the web app's
+   * pages and route handlers were the one part of the codebase CI never compiled, and
+   * this script only passed locally because a stale `.next` was lying around. `build`
+   * is now `pnpm -r build`.
+   */
   if (!existsSync(join(root, 'apps', 'web', '.next', 'BUILD_ID'))) {
-    throw new Error('apps/web has no build. Run `pnpm build` first.');
+    throw new Error(
+      'apps/web has no build, so `next start` has nothing to serve. Run `pnpm build` ' +
+        '(which must include apps/web, not only ./packages/**).',
+    );
   }
 
   console.log('building the projects…');
