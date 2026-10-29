@@ -8,7 +8,11 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The sim tests replay weeks of simulated history through the real ingest
+    # pipeline, one small time-local batch at a time (see send.ts for why the batches
+    # must stay small). That is ~69,000 SQL round trips per heavy test, so the suite
+    # is round-trip bound and a slower runner shows up as minutes, not seconds.
+    timeout-minutes: 35
 
     services:
       postgres:
@@ -45,6 +49,19 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # This database is thrown away when the job ends, so durability buys nothing
+      # and costs a WAL flush on every commit. The sim tests commit ~8,900 times
+      # each. Measured locally at 13% off the heaviest test; a CI runner's disk is
+      # slower than this container's, so it should be worth more there.
+      #
+      # `synchronous_commit` is reloadable, which is why it is set here rather than
+      # with `fsync=off`: a service container takes docker options, not Postgres
+      # ones, and `fsync` needs a restart.
+      - name: Make the throwaway database faster
+        run: >-
+          psql "$ADMIN_DATABASE_URL" -c
+          "ALTER DATABASE dripmetric SET synchronous_commit = off"
 
       - name: Apply migrations
         run: pnpm db:migrate

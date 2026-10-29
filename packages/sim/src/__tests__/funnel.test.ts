@@ -9,13 +9,11 @@ import {
   retentionHeadline,
   stepTrendRows,
   withProject,
-  type CreatedProject,
 } from '@dripmetric/db';
 import { loadRootEnv, runMigrations } from '@dripmetric/db/admin';
 import { MIN_COMPLETIONS_FOR_PERCENTILES } from '@dripmetric/engine';
 import {
   currentFunnelReport,
-  handleBatch,
   refreshLifecycle,
   runFunnelDaily,
   runFunnelHourly,
@@ -24,9 +22,24 @@ import {
 import { runSimulation } from '../run.js';
 import { configureProject } from '../setup.js';
 import { product } from '../products/index.js';
-import { deliveredAt } from '../faults.js';
+import { keysOf, sendRun } from './send.js';
 import { share } from '../score.js';
-import type { SimMessage, TruthFile } from '../types.js';
+import type { TruthFile } from '../types.js';
+
+/*
+ * 20 minutes, not 10.
+ *
+ * This hook replays weeks of simulated history through the real ingest pipeline in
+ * small time-local batches (send.ts says why they cannot be packed), which is about
+ * 69,000 SQL round trips and ~8,900 transactions. It takes ~60s against a local
+ * Postgres and is round-trip bound — 72% of that is the process waiting — so a
+ * runner with slower round trips scales it by a lot more than its CPU would suggest.
+ * CI timed out at 10 minutes on a hook that passes here in one.
+ *
+ * The headroom is the honest fix: the work is real, not accidental. Cutting the
+ * round trips belongs in M13's load test, where ingest performance is the subject.
+ */
+const SIM_LOAD_TIMEOUT_MS = 1_200_000;
 
 /**
  * M6 exit check (brief §11): "on simulator data, per-step drop-off, medians and stuck
@@ -104,52 +117,6 @@ async function resetData(): Promise<void> {
 }
 
 /** Sends a run through the pipeline the way the HTTP loader does. */
-async function send(
-  messages: readonly SimMessage[],
-  keys: { publishable: string; secret: string },
-): Promise<void> {
-  let group: SimMessage[] = [];
-  let serverSide = messages[0]?.serverSide ?? false;
-
-  const flush = async () => {
-    if (group.length === 0) return;
-    const receivedAt = group.reduce(
-      (latest, m) => (deliveredAt(m) > latest ? deliveredAt(m) : latest),
-      new Date(0),
-    );
-    await handleBatch({
-      body: JSON.stringify({
-        batch: group.map((m) => m.message),
-        sentAt: receivedAt.toISOString(),
-      }),
-      headers: {
-        authorization: `Bearer ${serverSide ? keys.secret : keys.publishable}`,
-        'content-type': 'application/json',
-        // A browser user agent: curl-shaped agents are correctly filtered as bots.
-        'user-agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36',
-      },
-      receivedAt,
-    });
-    group = [];
-  };
-
-  for (const message of messages) {
-    if (message.serverSide !== serverSide || group.length >= 200) {
-      await flush();
-      serverSide = message.serverSide;
-    }
-    group.push(message);
-  }
-  await flush();
-}
-
-function keysOf(created: CreatedProject): { publishable: string; secret: string } {
-  const publishable = created.keys.find((k) => k.kind === 'publishable' && k.mode === 'live');
-  const secret = created.keys.find((k) => k.kind === 'secret' && k.mode === 'live');
-  if (!publishable || !secret) throw new Error('createProject did not return both live keys.');
-  return { publishable: publishable.token, secret: secret.token };
-}
 
 /** The people the numbers are about: everyone the truth says we should track. */
 function tracked(truthFile: TruthFile) {
@@ -165,7 +132,7 @@ async function loadedProject(users: number, faults: never[] = []) {
   await withProject(created.live.id, (db) => configureProject(db, definition));
 
   const run = runSimulation({ product: 'selfserve', users, seed: 1, faults });
-  await send(run.messages, keysOf(created));
+  await sendRun(run.messages, keysOf(created));
   await withProject(created.live.id, refreshLifecycle);
 
   return { created, run, now: new Date(run.truthFile.endedAt) };
@@ -186,7 +153,7 @@ describe('the funnel engine against the truth file', () => {
     await ensureMigrated();
     await resetData();
     loaded = await loadedProject(200);
-  }, 300_000);
+  }, SIM_LOAD_TIMEOUT_MS);
   afterAll(closePools);
 
   it('reports per-step completions and drop-off that match what really happened', async () => {
@@ -394,7 +361,7 @@ describe('the funnel jobs', () => {
     // A second, different run of people arrives. Without the freeze their times
     // would move every threshold.
     const second = runSimulation({ product: 'selfserve', users: 120, seed: 99 });
-    await send(second.messages, keysOf(created));
+    await sendRun(second.messages, keysOf(created));
     const later = new Date(new Date(second.truthFile.endedAt).getTime() + 86_400_000);
 
     const after = await withProject(created.live.id, async (db) => {

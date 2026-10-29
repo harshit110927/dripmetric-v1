@@ -1,22 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
-import {
-  closePools,
-  confirmMapping,
-  createProject,
-  inbox,
-  withProject,
-  type CreatedProject,
-} from '@dripmetric/db';
+import { closePools, confirmMapping, createProject, inbox, withProject } from '@dripmetric/db';
 import { loadRootEnv, runMigrations } from '@dripmetric/db/admin';
 import type { AskOptions, AskResult } from '@dripmetric/engine';
-import { handleBatch, queueRecompute, recomputeProject, runSuggestions } from '@dripmetric/ingest';
+import { queueRecompute, recomputeProject, runSuggestions } from '@dripmetric/ingest';
 import { runSimulation } from '../run.js';
 import { configureProject } from '../setup.js';
 import { scoreIngest, share } from '../score.js';
 import { product } from '../products/index.js';
-import { deliveredAt } from '../faults.js';
-import type { SimMessage } from '../types.js';
+import { keysOf, sendRun } from './send.js';
 
 /**
  * M2 exit checks that need real ingest:
@@ -85,61 +77,6 @@ async function resetData(): Promise<void> {
 }
 
 /** Sends a run through the pipeline the way the HTTP loader does. */
-async function send(
-  messages: readonly SimMessage[],
-  keys: { publishable: string; secret: string },
-): Promise<{ ok: number; duplicate: number; filtered: number; errors: Record<string, number> }> {
-  const tally = { ok: 0, duplicate: 0, filtered: 0, errors: {} as Record<string, number> };
-
-  // Consecutive runs sharing a key, exactly as load.ts groups them: an identify()
-  // has to arrive before the events that depend on its traits.
-  let group: SimMessage[] = [];
-  let serverSide = messages[0]?.serverSide ?? false;
-
-  const flush = async () => {
-    if (group.length === 0) return;
-    const receivedAt = group.reduce(
-      (latest, m) => (deliveredAt(m) > latest ? deliveredAt(m) : latest),
-      new Date(0),
-    );
-    const response = await handleBatch({
-      body: JSON.stringify({
-        batch: group.map((m) => m.message),
-        sentAt: receivedAt.toISOString(),
-      }),
-      headers: {
-        authorization: `Bearer ${serverSide ? keys.secret : keys.publishable}`,
-        'content-type': 'application/json',
-      },
-      receivedAt,
-    });
-    const body = response.body as { results?: { status: string; code: string }[] };
-    for (const item of body.results ?? []) {
-      if (item.status === 'ok') tally.ok += 1;
-      else if (item.status === 'duplicate') tally.duplicate += 1;
-      else if (item.status === 'filtered') tally.filtered += 1;
-      else tally.errors[item.code] = (tally.errors[item.code] ?? 0) + 1;
-    }
-    group = [];
-  };
-
-  for (const message of messages) {
-    if (message.serverSide !== serverSide || group.length >= 200) {
-      await flush();
-      serverSide = message.serverSide;
-    }
-    group.push(message);
-  }
-  await flush();
-  return tally;
-}
-
-function keysOf(project: CreatedProject): { publishable: string; secret: string } {
-  const publishable = project.keys.find((k) => k.kind === 'publishable' && k.mode === 'live');
-  const secret = project.keys.find((k) => k.kind === 'secret' && k.mode === 'live');
-  if (!publishable || !secret) throw new Error('createProject did not return both live keys.');
-  return { publishable: publishable.token, secret: secret.token };
-}
 
 describe('a simulator run through real ingest', () => {
   beforeAll(ensureMigrated, 60_000);
@@ -153,7 +90,7 @@ describe('a simulator run through real ingest', () => {
     });
     const run = runSimulation({ product: 'selfserve', users: 60, seed: 1 });
 
-    const tally = await send(run.messages, keysOf(project));
+    const tally = await sendRun(run.messages, keysOf(project), { userAgent: null });
 
     expect(tally.errors).toEqual({});
     expect(tally.ok).toBeGreaterThan(0);
@@ -188,7 +125,7 @@ describe('a simulator run through real ingest', () => {
   it('injected duplicates do not change counts', async () => {
     const cleanProject = await createProject({ name: 'Sim clean' });
     const clean = runSimulation({ product: 'selfserve', users: 50, seed: 1 });
-    const cleanTally = await send(clean.messages, keysOf(cleanProject));
+    const cleanTally = await sendRun(clean.messages, keysOf(cleanProject), { userAgent: null });
     const cleanRows = await withProject(cleanProject.live.id, (db) =>
       db.query<{ count: string }>('SELECT count(*) FROM events'),
     );
@@ -200,7 +137,7 @@ describe('a simulator run through real ingest', () => {
       seed: 1,
       faults: ['duplicates'],
     });
-    const faultyTally = await send(faulty.messages, keysOf(faultyProject));
+    const faultyTally = await sendRun(faulty.messages, keysOf(faultyProject), { userAgent: null });
     const faultyRows = await withProject(faultyProject.live.id, (db) =>
       db.query<{ count: string }>('SELECT count(*) FROM events'),
     );
@@ -222,7 +159,7 @@ describe('a simulator run through real ingest', () => {
       faults: ['late-events'],
     });
 
-    const tally = await send(run.messages, keysOf(project));
+    const tally = await sendRun(run.messages, keysOf(project), { userAgent: null });
     expect(tally.errors).toEqual({});
 
     const rows = await withProject(project.live.id, (db) =>
@@ -266,8 +203,8 @@ describe('a simulator run through real ingest', () => {
       });
     }
 
-    await send(ordered.messages, keysOf(orderedProject));
-    await send(late.messages, keysOf(lateProject));
+    await sendRun(ordered.messages, keysOf(orderedProject), { userAgent: null });
+    await sendRun(late.messages, keysOf(lateProject), { userAgent: null });
 
     const stateOf = (id: number) =>
       withProject(id, (db) =>
@@ -292,7 +229,7 @@ describe('a simulator run through real ingest', () => {
     const project = await createProject({ name: 'Sim skewed' });
     const run = runSimulation({ product: 'selfserve', users: 40, seed: 1, faults: ['clock-skew'] });
 
-    await send(run.messages, keysOf(project));
+    await sendRun(run.messages, keysOf(project), { userAgent: null });
 
     const rows = await withProject(project.live.id, (db) =>
       db.query<{ count: string }>(
@@ -341,7 +278,7 @@ describe('a simulator run through real ingest', () => {
       );
     });
 
-    const tally = await send(run.messages, keysOf(project));
+    const tally = await sendRun(run.messages, keysOf(project), { userAgent: null });
     expect(tally.errors).toEqual({});
 
     // The Inbox lists the founder's new name, with the events behind it.
@@ -410,7 +347,7 @@ describe('a simulator run through real ingest', () => {
     });
     const run = runSimulation({ product: 'selfserve', users: 30, seed: 1, faults: ['burst'] });
 
-    const tally = await send(run.messages, keysOf(project));
+    const tally = await sendRun(run.messages, keysOf(project), { userAgent: null });
 
     // The burst is absorbed: no errors, and the overflow is counted, not stored.
     expect(tally.errors).toEqual({});
@@ -459,7 +396,7 @@ describe('scoring a run against the truth file', () => {
       await withProject(project.live.id, (db) => configureProject(db, definition));
 
       const run = runSimulation({ product: key, users: 150, seed: 11 });
-      await send(run.messages, keysOf(project));
+      await sendRun(run.messages, keysOf(project), { userAgent: null });
 
       const score = await withProject(project.live.id, (db) => scoreIngest(db, run.truthFile));
 
@@ -498,7 +435,7 @@ describe('scoring a run against the truth file', () => {
       seed: 13,
       faults: ['duplicates', 'late-events', 'clock-skew'],
     });
-    await send(run.messages, keysOf(project));
+    await sendRun(run.messages, keysOf(project), { userAgent: null });
 
     const score = await withProject(project.live.id, (db) => scoreIngest(db, run.truthFile));
 

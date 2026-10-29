@@ -3,7 +3,6 @@ import pg from 'pg';
 import { closePools, createProject, withProject, type CreatedProject } from '@dripmetric/db';
 import { loadRootEnv, runMigrations } from '@dripmetric/db/admin';
 import {
-  handleBatch,
   leakSummary,
   refreshIntentState,
   refreshLifecycle,
@@ -14,9 +13,24 @@ import {
 import { runSimulation } from '../run.js';
 import { configureProject } from '../setup.js';
 import { product } from '../products/index.js';
-import { deliveredAt } from '../faults.js';
+import { keysOf, sendRun } from './send.js';
 import { share } from '../score.js';
-import type { SimMessage, TruthFile } from '../types.js';
+import type { TruthFile } from '../types.js';
+
+/*
+ * 20 minutes, not 10.
+ *
+ * This hook replays weeks of simulated history through the real ingest pipeline in
+ * small time-local batches (send.ts says why they cannot be packed), which is about
+ * 69,000 SQL round trips and ~8,900 transactions. It takes ~60s against a local
+ * Postgres and is round-trip bound — 72% of that is the process waiting — so a
+ * runner with slower round trips scales it by a lot more than its CPU would suggest.
+ * CI timed out at 10 minutes on a hook that passes here in one.
+ *
+ * The headroom is the honest fix: the work is real, not accidental. Cutting the
+ * round trips belongs in M13's load test, where ingest performance is the subject.
+ */
+const SIM_LOAD_TIMEOUT_MS = 1_200_000;
 
 /**
  * M8 exit check (brief §11): "the simulator report prints the share of stalled users
@@ -96,52 +110,6 @@ async function resetData(): Promise<void> {
   }
 }
 
-async function send(
-  messages: readonly SimMessage[],
-  keys: { publishable: string; secret: string },
-): Promise<void> {
-  let group: SimMessage[] = [];
-  let serverSide = messages[0]?.serverSide ?? false;
-
-  const flush = async () => {
-    if (group.length === 0) return;
-    const receivedAt = group.reduce(
-      (latest, m) => (deliveredAt(m) > latest ? deliveredAt(m) : latest),
-      new Date(0),
-    );
-    await handleBatch({
-      body: JSON.stringify({
-        batch: group.map((m) => m.message),
-        sentAt: receivedAt.toISOString(),
-      }),
-      headers: {
-        authorization: `Bearer ${serverSide ? keys.secret : keys.publishable}`,
-        'content-type': 'application/json',
-        'user-agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36',
-      },
-      receivedAt,
-    });
-    group = [];
-  };
-
-  for (const message of messages) {
-    if (message.serverSide !== serverSide || group.length >= 200) {
-      await flush();
-      serverSide = message.serverSide;
-    }
-    group.push(message);
-  }
-  await flush();
-}
-
-function keysOf(created: CreatedProject): { publishable: string; secret: string } {
-  const publishable = created.keys.find((k) => k.kind === 'publishable' && k.mode === 'live');
-  const secret = created.keys.find((k) => k.kind === 'secret' && k.mode === 'live');
-  if (!publishable || !secret) throw new Error('createProject did not return both live keys.');
-  return { publishable: publishable.token, secret: secret.token };
-}
-
 interface Loaded {
   created: CreatedProject;
   truthFile: TruthFile;
@@ -168,7 +136,7 @@ describe('the leak engine against the truth file', () => {
     await withProject(created.live.id, (db) => configureProject(db, definition));
 
     const run = runSimulation({ product: 'selfserve', users: 250, seed: 5 });
-    await send(run.messages, keysOf(created));
+    await sendRun(run.messages, keysOf(created));
 
     const now = new Date(run.truthFile.endedAt);
     await withProject(created.live.id, refreshLifecycle);
@@ -180,7 +148,7 @@ describe('the leak engine against the truth file', () => {
     await withProject(created.live.id, (db) => sweepStepCollapse(db, now));
 
     loaded = { created, truthFile: run.truthFile, now };
-  }, 600_000);
+  }, SIM_LOAD_TIMEOUT_MS);
   afterAll(closePools);
 
   it('catches the people the truth file says stalled, and prints the share', async () => {

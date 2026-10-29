@@ -1320,3 +1320,65 @@ The windows are equal by construction and widen day by day until the plan's cap.
 7-day "after" against a 45-day "before" compares a week of one product against six
 weeks of another, and whichever way the number moved the founder would have learnt
 nothing.
+
+### 2026-10-29 · The simulator's tiny batches are deliberate, and I broke them once
+
+CI timed out after 10 minutes in `intent.test.ts`'s loader hook, on a hook that passes
+here in 61 seconds. A 300-user run is 6,218 messages but goes out as ~1,782 batches
+averaging 3.5 messages, because the batch closes every time the stream switches
+between a browser-sent and a server-sent message and the simulator interleaves them
+one at a time.
+
+I read that as a 50x defect and packed the batches 200 at a time. Three tests in
+`ingest.test.ts` failed, and they were right to:
+
+`receivedAt` is the batch's arrival time, derived from the messages in it. A simulated
+run spans WEEKS, so a batch of 200 consecutive messages spans days of simulated time
+and its arrival time is the latest of them — which makes the other 199 arrive long
+after their own timestamps, and an event older than the request carrying it is the
+definition of a late event. Packing flagged almost everything late and moved the
+filtered and duplicate counts with it.
+
+So the small batches are the point: they keep `received_at` close to each event's own
+time, which is what a real client does when it holds events briefly and posts them
+promptly. Reverted.
+
+What the slowness actually is, measured rather than guessed. With statement logging
+on, 400 messages produced 5,436 statements and 707 transactions across 141 batches —
+38.6 statements and 5 transactions per batch, so a heavy hook makes ~69,000 round
+trips and ~8,900 commits. The timing agrees: 54s of wall clock against 11.4s user and
+3.2s sys, so the process is idle 72% of the time, waiting. `synchronous_commit = off`
+bought only 13%, which confirms round trips rather than fsync.
+
+That is why a slower runner costs minutes and not seconds, and the fix is headroom
+plus the cheap wins, because the work is real:
+
+- the CI job's own limit went 20 → 35 minutes. It was the binding constraint: tests
+  alone took 14.4 minutes, so the job would have been killed before any hook timeout
+  mattered.
+- `synchronous_commit = off` on the throwaway CI database. Durability buys nothing
+  there and costs a WAL flush per commit. Set by SQL because a service container
+  takes docker options, not Postgres ones, and `fsync` needs a restart.
+- the three heavy loader hooks now allow 20 minutes, with the round-trip count
+  written next to the number so nobody reads it as a flake.
+
+`--tmpfs` over Postgres's data directory is the bigger win and is not here: it cannot
+be verified against a real GitHub service container from this machine, and breaking CI
+outright is worse than a slow CI.
+
+Not fixed, deliberately: 5 transactions per batch is worth questioning, and cutting
+the round trips means moving ingest's transaction boundaries. That belongs in M13's
+load test, where ingest performance is the subject, not in a drive-by change to the
+hot path.
+
+### 2026-10-29 · One `sendRun`, four copies gone
+
+The same thirty-line loader was pasted into four sim tests. It is now
+`packages/sim/src/__tests__/send.ts`, with the original flip-based batching preserved
+exactly — the consolidation had to be behaviour-preserving, which is the whole reason
+the packing experiment above was reverted rather than kept.
+
+One difference was load-bearing and nearly lost: the ingest test sent NO user-agent
+header while the other three sent a browser one, and that test asserts how many
+messages are filtered, which depends on bot detection reading the agent. Those calls
+pass `{ userAgent: null }` rather than inheriting whichever default looked tidier.
