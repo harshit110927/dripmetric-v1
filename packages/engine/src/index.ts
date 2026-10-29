@@ -259,3 +259,73 @@ export type {
   Suggestion,
   SuggestOutcome,
 } from './mapping/suggest.js';
+
+// --- M10: alerts and reports (brief §9) -------------------------------------
+export { formatMoney, plural } from './money.js';
+
+export {
+  inQuietHours,
+  nextMorning,
+  localDayKey,
+  localWeekday,
+  localHour,
+  startOfLocalDay,
+  DEFAULT_QUIET_HOURS,
+} from './alerts/quiet-hours.js';
+export type { QuietHours } from './alerts/quiet-hours.js';
+
+export { decideAlerts, DEFAULT_ALERTS_PER_DAY } from './alerts/policy.js';
+export type {
+  AlertCandidate,
+  AlertChannel,
+  AlertDecision,
+  AlertPlan,
+  AlertPolicyInput,
+  AlertRoute,
+} from './alerts/policy.js';
+
+export {
+  alertContent,
+  toSlack,
+  toDiscord,
+  ALERT_TITLES,
+  DISCORD_COLOURS,
+  DISCORD_LIMITS,
+  SLACK_LIMITS,
+  WEBHOOK_USERNAME,
+} from './alerts/payload.js';
+export type {
+  AlertContent,
+  AlertFacts,
+  AlertField,
+  DiscordEmbed,
+  DiscordPayload,
+  SlackBlock,
+  SlackPayload,
+} from './alerts/payload.js';
+
+export { weeklyReport, paybackLine, REPORT_PARTS, STARTER_PRICE_MINOR } from './reports/weekly.js';
+export type {
+  ReportPart,
+  ReportPartKey,
+  WeeklyReport,
+  WeeklyReportFacts,
+  WorstStepFact,
+} from './reports/weekly.js';
+
+export { digest, DIGEST_ITEM_LIMIT } from './reports/digest.js';
+export type { Digest, DigestFacts, DigestItem } from './reports/digest.js';
+
+export {
+  compareChange,
+  equalWindows,
+  MIN_USERS_PER_WINDOW,
+  FREE_WINDOW_DAYS_MAX,
+} from './reports/changes.js';
+export type {
+  ChangeComparison,
+  ChangeComparisonInput,
+  ChangeVerdict,
+  ChangeWindow,
+  WindowPair,
+} from './reports/changes.js';

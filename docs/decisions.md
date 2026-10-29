@@ -1227,3 +1227,96 @@ Both numbers are right and the pair is confusing, so the module now says so in o
 line rather than leaving a founder to work it out. The list also gained the band
 column brief §9 asks for — "a masked list with tag, band, leak and a coarse time" —
 which had simply been missed until the screenshot made it visible.
+
+### 2026-10-29 · `pnpm build` never built the apps
+
+CI failed on `pnpm screens` with "apps/web has no build" while the same command
+passed locally. The screens script was not at fault: the root `build` script was
+`pnpm -r --filter "./packages/**" build`, so `next build` had never run in CI. The web
+app's pages and route handlers were the one part of the codebase CI never compiled,
+and `pnpm screens` passed here only because a stale `.next` from M9 was lying around.
+
+`build` is now `pnpm -r build`. That also compiles `examples/next-app` against the
+published SDK types, which the publishing step will depend on. `next-env.d.ts` is now
+ignored for the examples app as it already was for the web app: `next build` and
+`next dev` write different contents into it, so a tracked copy flips with whichever
+ran last.
+
+The CI ordering is why this hid for four milestones — Formatting runs before Build, so
+the churn in that generated file never failed a step that would have pointed at it.
+
+### 2026-10-29 · Quiet hours are a wrapping window, and the day is the founder's
+
+22:00–08:00 is not a range in the arithmetic sense, so `inQuietHours` handles the wrap
+rather than comparing two hours. `startHour === endHour` means "always quiet", which
+is a legitimate way to say "feed only, never ping me", and `nextMorning` returns the
+instant unchanged for it so nothing is held forever.
+
+`nextMorning` steps hour by hour instead of adding ten hours, because the night a zone
+leaves daylight saving is 25 hours long: adding a fixed offset releases that night's
+held alerts at 07:00 local. There is a test for exactly that night in Berlin.
+
+The 10-a-day cap counts against the founder's LOCAL day. A UTC day would reset a
+founder in Auckland's cap in the middle of their afternoon, giving them ten alerts
+before it and ten after. `startOfLocalDay` reads the zone's offset back out of `Intl`
+and resolves it twice, so it is right for half-hour zones and for the night an offset
+changes.
+
+### 2026-10-29 · The alert guards are re-checked at send time, not trusted
+
+Every per-person leak already applies the three guards when it is recorded. The alert
+policy applies them AGAIN, against freshly loaded facts. A last-moment drop found on
+Monday for someone who paid on Tuesday must not be sent on Wednesday, and the only way
+to know that is to look again now.
+
+Which leaks skip the paid guard is now a field on the leak definition
+(`aboutPayers`) rather than a list inside the dispatcher. Two places that must agree
+is one place too many (rule 11).
+
+### 2026-10-29 · A held alert spends a slot in the daily cap
+
+The cap could have counted only what was sent. Then a quiet night would hold thirty
+alerts and deliver all of them at 08:00, which is the exact thing the cap exists to
+prevent. A held alert is going to arrive, so it spends its slot when it is decided.
+
+### 2026-10-29 · The Discord embed carries no timestamp
+
+Discord renders `timestamp` to the minute in the viewer's own zone. A masked alert
+with a minute on it can be matched against the founder's server log or Stripe, which
+is the attack the coarse times exist to stop (brief §9). The `When` field carries
+"today" or "this week" instead, and a test asserts no ISO timestamp appears anywhere
+in the payload.
+
+### 2026-10-29 · One neutral alert, rendered twice
+
+`alertContent` builds a channel-agnostic shape and `toSlack`/`toDiscord` render it.
+Neither renderer ever sees a name: by the time a payload is built, `who` is already a
+tag or already a name and the decision was taken once, in the data-access layer. A
+renderer that could mask would be a second place to get masking wrong.
+
+Both shapes were verified against the live docs rather than from memory (brief §12),
+on 2026-10-29. Slack's advanced sample sets `text` alongside `blocks`, which is what a
+phone notification shows — without it a push reads "This content can't be displayed".
+Discord's documented maxima are enforced in code, including the 6,000 characters
+across the whole message; the description is what gets shortened, because it is the
+only field whose length the founder's own step labels control.
+
+### 2026-10-29 · The payback line is USD only, and 24.99 is one constant
+
+Brief §9 part 8 asks for the line only when the project's currency is USD. Converting
+would need a rate, a rate has a date, and a sentence about what our own plan costs is
+the last place to show a number we cannot show the working for. `STARTER_PRICE_MINOR`
+is 2499 in minor units, matching the `starter` row seeded in migration 0001, so the
+two move together or the report lies.
+
+### 2026-10-29 · "Too early to tell" is a number, not a shrug
+
+The Changes comparison needs 100 users entering the step in EACH window, not 100
+across both: 180 before and 20 after is still too early. Rather than saying only "too
+early", it says how many more are needed on the thinner side, which turns an
+indefinite wait into one with an end.
+
+The windows are equal by construction and widen day by day until the plan's cap. A
+7-day "after" against a 45-day "before" compares a week of one product against six
+weeks of another, and whichever way the number moved the founder would have learnt
+nothing.

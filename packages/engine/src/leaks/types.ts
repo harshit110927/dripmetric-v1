@@ -41,6 +41,16 @@ export interface LeakDefinition {
   masked: boolean;
   /** Data without which this leak cannot be computed. */
   needs: readonly LeakRequirement[];
+  /**
+   * True for the two leaks that are ABOUT paying customers.
+   *
+   * Every other leak is suppressed for someone who has paid — that is the whole
+   * point of it. For these two, having paid is part of the story, so the paid guard
+   * is skipped and the other two (deleted, opted out) still apply. It lives on the
+   * definition rather than in a list inside the alert dispatcher, because a list
+   * somewhere else is a list that drifts (CLAUDE.md rule 11).
+   */
+  aboutPayers: boolean;
   /** Which sweep runs it (brief §8.3: every 5 minutes, hourly for the collapse). */
   sweep: 'five-minute' | 'hourly' | 'daily';
 }
@@ -54,6 +64,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: false,
     masked: true,
     needs: [],
+    aboutPayers: false,
     sweep: 'five-minute',
   },
   {
@@ -63,6 +74,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: true,
     masked: true,
     needs: ['paid-event'],
+    aboutPayers: false,
     sweep: 'five-minute',
   },
   {
@@ -72,6 +84,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: true,
     masked: true,
     needs: ['paid-event'],
+    aboutPayers: false,
     sweep: 'five-minute',
   },
   {
@@ -81,6 +94,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: true,
     masked: true,
     needs: ['paid-event', 'trial-dates'],
+    aboutPayers: false,
     sweep: 'daily',
   },
   {
@@ -91,6 +105,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     // "Unmasked because it concerns a step, not a person" (brief §8.3).
     masked: false,
     needs: [],
+    aboutPayers: false,
     sweep: 'hourly',
   },
   {
@@ -100,6 +115,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: true,
     masked: true,
     needs: ['paid-event'],
+    aboutPayers: true,
     sweep: 'daily',
   },
   {
@@ -110,6 +126,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: false,
     masked: true,
     needs: [],
+    aboutPayers: true,
     sweep: 'five-minute',
   },
   {
@@ -120,6 +137,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: false,
     masked: true,
     needs: [],
+    aboutPayers: false,
     sweep: 'daily',
   },
   {
@@ -129,6 +147,7 @@ export const LEAK_DEFINITIONS: readonly LeakDefinition[] = [
     alerts: true,
     masked: true,
     needs: ['paid-event'],
+    aboutPayers: false,
     sweep: 'five-minute',
   },
 ];
