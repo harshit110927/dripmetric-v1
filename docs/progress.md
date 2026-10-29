@@ -265,15 +265,47 @@ composite `ON DELETE SET NULL` then tried to null a NOT NULL `project_id`; and a
 project that had never sent an event would have been emailed every Monday about its
 switched-off metrics, which is not broken tracking but an empty setup screen.
 
-## M11 · Tracking health, retention and deletion — `[ ]`
+## M11 · Tracking health, retention and deletion — `[x]`
 
 **Build:** tracking health (brief §9), nightly summaries and retention job, `deleteUser`,
 `DELETE /v1/users/:userId`, an audit-log view, the legal placeholder pages.
 
-- [ ] stopping a key event raises a tracking alert within one sweep, not a "users vanished" alert
-- [ ] shape drift and double-sent events are detected
-- [ ] the nightly job writes summaries first, deletes only raw events past the window
-- [ ] deleting a user removes every row for them (verified with SQL) and is audited
+- [x] stopping a key event raises a tracking alert within one sweep, not a "users
+      vanished" alert — 14 days at ~5/day then 24 hours of silence produces
+      `missing-event` whose sentence is "No 'Signed Up' has arrived for 35 hours,
+      against a normal 5 a day. This looks like tracking that stopped, not people who
+      stopped." The baseline EXCLUDES the recent window, so an outage cannot drag its
+      own baseline down and quietly stop firing. An event under 3/day has no baseline
+      and is left alone; the finding raises once per episode and closes itself when
+      the event comes back.
+- [x] shape drift and double-sent events are detected — a property that changed type
+      ("price used to be a number and is now a string"), a new property on an event
+      known for 7+ days, and the same person/event/second arriving from two source
+      paths ("arriving from 2 places at once (browser and server)"). A type change
+      affecting fewer than 20 events is ignored: that is a founder fixing their own
+      bug, not drift.
+- [x] the nightly job writes summaries first, deletes only raw events past the window
+      — 25 events, 15 of them past 90 days: summary written, 15 deleted, 10 kept, and
+      the summary row still there afterwards. Deletes are batched by time range (one
+      day per statement) so `events` can be partitioned by month later. Runs once a
+      night however often the sweep fires.
+- [x] deleting a user removes every row for them (verified with SQL) and is audited —
+      and the verification now asks `information_schema` which tables have a
+      `user_key`, plus the two that identify a person by `subject_key`, so a table
+      added in a later milestone is covered the day it lands.
+
+**Found while building it:** `deleteUser` was leaving `leak_instances` and `alerts`
+behind. Both identify their subject with a plain `subject_key` — they can be about a
+user, an account or a step — so neither has a foreign key to `end_users` and nothing
+cascaded. On a paid project an alert's stored sentence can name the person, so their
+name would have stayed in the feed after they asked to be erased. That is why the new
+test interrogates the schema instead of trusting a list: the hand-written list in
+`deleteUser` was written in M4 and these tables arrived in M8 and M10.
+
+**Also:** the weekly report's part 5 now reads real tracking findings first and falls
+back to switched-off metrics, the audit-log view shows full timestamps (the opposite
+job to a masked alert's coarse ones), and the privacy and terms pages say plainly that
+they are placeholders rather than pretending to be reviewed legal text.
 
 ## M12 · Source adapters, free audit and AI-coder prompt — `[ ]`
 

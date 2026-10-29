@@ -1,6 +1,9 @@
 import { closePools, withoutProject } from '@dripmetric/db';
 import { loadRootEnv } from '@dripmetric/db/admin';
 import {
+  runRetention,
+  runTrackingHealth,
+  sweepUnclaimedProjects,
   runAlertDispatch,
   runDailyDigest,
   runWeeklyReport,
@@ -242,6 +245,62 @@ async function main(): Promise<void> {
     await fanOutAll(queue, QUEUES.dailyDigestFor, 'digest');
   });
 
+  /*
+   * Tracking health (brief §9, M11).
+   *
+   * Hourly, because the missing-event check compares a 24-hour window against a
+   * 14-day baseline: checking more often would ask the same question of the same
+   * data. The exit check is that stopping a key event raises a TRACKING alert within
+   * one sweep — not an alert saying the users went away.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.trackingHealth, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runTrackingHealth(job.data.projectId, new Date());
+      if (result.recorded > 0 || result.resolved > 0) {
+        log.info('tracking health', {
+          projectId: job.data.projectId,
+          recorded: result.recorded,
+          resolved: result.resolved,
+          kinds: result.findings.map((finding) => finding.kind),
+        });
+      }
+    }
+  });
+
+  await queue.work(QUEUES.trackingHealthFanOut, () =>
+    fanOutAll(queue, QUEUES.trackingHealth, 'health'),
+  );
+
+  /*
+   * Retention (brief §10, M11).
+   *
+   * Summaries first, then the deletes, in that order inside one job — the order is
+   * the requirement, so it cannot be two jobs that might run out of sequence.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.retention, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runRetention(job.data.projectId, new Date());
+      if (result.ran) {
+        log.info('retention', {
+          projectId: job.data.projectId,
+          retentionDays: result.retentionDays,
+          eventsDeleted: result.eventsDeleted,
+          batches: result.batches,
+          more: result.more,
+        });
+      }
+    }
+  });
+
+  await queue.work(QUEUES.retentionFanOut, () => fanOutAll(queue, QUEUES.retention, 'retention'));
+
+  await queue.work(QUEUES.unclaimedSweep, async () => {
+    const result = await sweepUnclaimedProjects(new Date());
+    if (result.stopped > 0 || result.deleted > 0) {
+      log.info('unclaimed projects swept', { stopped: result.stopped, deleted: result.deleted });
+    }
+  });
+
   // Every 5 minutes, and hourly for the collapse test (brief §8.3).
   await queue.schedule(QUEUES.leakSweepFanOut, '*/5 * * * *');
   await queue.schedule(QUEUES.collapseFanOut, '23 * * * *');
@@ -266,6 +325,17 @@ async function main(): Promise<void> {
   // Hourly at :19. Each project's own job decides whether it is Monday morning or
   // evening THERE; this only has to come round often enough not to miss an hour.
   await queue.schedule(QUEUES.reportFanOut, '19 * * * *');
+  // Hourly at :41, away from the other passes so they do not contend.
+  await queue.schedule(QUEUES.trackingHealthFanOut, '41 * * * *');
+  /*
+   * Retention at 03:17, AFTER the 02:11 nightly summaries.
+   *
+   * It writes its own summary first anyway — the order is enforced inside the job,
+   * not by the schedule — but running it after the nightly pass means the day's
+   * aggregates are already there and the delete is the only work left.
+   */
+  await queue.schedule(QUEUES.retentionFanOut, '17 3 * * *');
+  await queue.schedule(QUEUES.unclaimedSweep, '43 3 * * *');
 
   const health = setInterval(() => {
     void reportHealth(queue);

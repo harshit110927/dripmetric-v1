@@ -138,4 +138,90 @@ describe('deleting a user', () => {
     // The table arrives at M11; this asserts the delete does not depend on it.
     expect(rows).toHaveLength(1);
   });
+
+  /**
+   * The exit check, written so it cannot go stale.
+   *
+   * The test above asserts a hand-written list of tables, and a hand-written list is
+   * exactly what went wrong twice in this project: `resetData` drifted across five
+   * copies, and `deleteUser` itself was missing `alerts` and `leak_instances` because
+   * they arrived three milestones after it was written.
+   *
+   * So this asks the DATABASE which tables could hold a person, instead of being told.
+   * A table added in M12 with a `user_key` column is covered the day it lands.
+   */
+  it('leaves no row anywhere that holds that user key, checked against the live schema', async () => {
+    await seed();
+    const userKey = await withProject(fx.project.live.id, async (db) => {
+      const row = await db.one<{ user_key: number }>(
+        `SELECT user_key FROM end_users WHERE project_id = $1 AND external_id = 'user_doomed'`,
+        [db.projectId],
+      );
+      return row.user_key;
+    });
+
+    // Give them a leak and an alert too, which nothing cascades from.
+    await withProject(fx.project.live.id, async (db) => {
+      await db.exec(
+        `INSERT INTO leak_instances
+           (project_id, subject_kind, subject_key, leak_type, episode_key, fired_at, says)
+         VALUES ($1, 'user', $2, 'last-moment-drop', 'e1', now(), 'They started checkout.')`,
+        [db.projectId, userKey],
+      );
+      await db.exec(
+        `INSERT INTO alerts
+           (project_id, leak_instance_id, leak_type, subject_kind, subject_key,
+            title, says, masked, fired_at, route, dedupe_key)
+         VALUES ($1, NULL, 'last-moment-drop', 'user', $2, 'T', 'S', false, now(),
+                 'feed-only', 'k1')`,
+        [db.projectId, userKey],
+      );
+    });
+
+    const result = await deleteUser(fx.secretKey, 'user_doomed');
+    expect(result.status).toBe(200);
+
+    const leftovers = await withProject(fx.project.live.id, async (db) => {
+      // Every table in `public` with a `user_key` column, from the catalog itself.
+      const byUserKey = await db.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.columns
+          WHERE table_schema = 'public' AND column_name = 'user_key'
+          ORDER BY table_name`,
+      );
+      // ...plus the two that identify a person as a `subject_key`.
+      const bySubject = await db.query<{ table_name: string }>(
+        `SELECT c.table_name FROM information_schema.columns c
+          WHERE c.table_schema = 'public' AND c.column_name = 'subject_key'
+            AND EXISTS (
+              SELECT 1 FROM information_schema.columns s
+               WHERE s.table_schema = 'public' AND s.table_name = c.table_name
+                 AND s.column_name = 'subject_kind'
+            )
+          ORDER BY c.table_name`,
+      );
+
+      const found: string[] = [];
+      for (const { table_name } of byUserKey) {
+        const row = await db.one<{ n: string }>(
+          `SELECT count(*) AS n FROM ${table_name} WHERE project_id = $1 AND user_key = $2`,
+          [db.projectId, userKey],
+        );
+        if (Number(row.n) > 0) found.push(`${table_name} (${row.n} by user_key)`);
+      }
+      for (const { table_name } of bySubject) {
+        const row = await db.one<{ n: string }>(
+          `SELECT count(*) AS n FROM ${table_name}
+            WHERE project_id = $1 AND subject_kind = 'user' AND subject_key = $2`,
+          [db.projectId, userKey],
+        );
+        if (Number(row.n) > 0) found.push(`${table_name} (${row.n} by subject_key)`);
+      }
+
+      return { found, tables: byUserKey.length + bySubject.length };
+    });
+
+    // The count is asserted too: a query that found no tables would pass vacuously.
+    expect(leftovers.tables).toBeGreaterThan(6);
+    expect(leftovers.found).toEqual([]);
+  });
 });

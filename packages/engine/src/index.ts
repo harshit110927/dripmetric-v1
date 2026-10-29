@@ -329,3 +329,33 @@ export type {
   ChangeWindow,
   WindowPair,
 } from './reports/changes.js';
+
+// --- M11: tracking health (brief §9) ----------------------------------------
+export {
+  missingEvents,
+  shapeDrift,
+  doubleSent,
+  lateEvents,
+  sourceShareCollapse,
+  FINDING_KINDS,
+  MISSING_EVENT_HOURS,
+  MISSING_EVENT_MIN_BASELINE,
+  BASELINE_DAYS,
+  SHAPE_DRIFT_MIN_PRIOR,
+  NEW_PROPERTY_GRACE_DAYS,
+  DOUBLE_SENT_MIN_PAIRS,
+  DOUBLE_SENT_MIN_SHARE,
+  LATE_SHARE_THRESHOLD,
+  LATE_MIN_EVENTS,
+  SOURCE_COLLAPSE_RATIO,
+  SOURCE_MIN_BASELINE,
+} from './health/checks.js';
+export type {
+  DoubleSentFact,
+  EventRateFact,
+  FindingKind,
+  HealthFinding,
+  LateFact,
+  PropertyShapeFact,
+  SourceShareFact,
+} from './health/checks.js';

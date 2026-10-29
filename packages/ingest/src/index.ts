@@ -134,3 +134,15 @@ export {
   DIGEST_HOUR,
 } from './alerts/reports.js';
 export type { OutgoingEmail, ReportRunResult, SendEmail } from './alerts/reports.js';
+
+export {
+  runRetention,
+  sweepUnclaimedProjects,
+  RETENTION_BATCH_HOURS,
+  RETENTION_MAX_BATCHES,
+  UNCLAIMED_STOP_DAYS,
+  UNCLAIMED_DELETE_DAYS,
+} from './retention.js';
+export type { RetentionResult, UnclaimedResult } from './retention.js';
+export { checkTrackingHealth, runTrackingHealth, trackingProblems } from './health/run.js';
+export type { HealthResult } from './health/run.js';

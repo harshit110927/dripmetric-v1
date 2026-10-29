@@ -138,7 +138,32 @@ async function refreshProperties(
        sample          = EXCLUDED.sample,
        distinct_values = EXCLUDED.distinct_values,
        seen_count      = EXCLUDED.seen_count,
-       last_seen_at    = EXCLUDED.last_seen_at`,
+       last_seen_at    = EXCLUDED.last_seen_at,
+       /*
+        * Keep the type we are replacing, so shape drift is detectable (M11).
+        *
+        * Without this the row only ever holds the CURRENT type, so a property that
+        * changes from a number to a string simply overwrites and the change is
+        * invisible. Only a real change is recorded, and the old row's
+        * seen_count goes with it, because a property seen twice as a number before
+        * settling as a string is a founder fixing their own bug and not drift worth
+        * alerting on.
+        */
+       prior_value_type = CASE
+         WHEN event_name_properties.value_type IS DISTINCT FROM EXCLUDED.value_type
+           THEN event_name_properties.value_type
+         ELSE event_name_properties.prior_value_type
+       END,
+       prior_seen_count = CASE
+         WHEN event_name_properties.value_type IS DISTINCT FROM EXCLUDED.value_type
+           THEN event_name_properties.seen_count
+         ELSE event_name_properties.prior_seen_count
+       END,
+       type_changed_at = CASE
+         WHEN event_name_properties.value_type IS DISTINCT FROM EXCLUDED.value_type
+           THEN EXCLUDED.last_seen_at
+         ELSE event_name_properties.type_changed_at
+       END`,
     [
       db.projectId,
       rows.map((r) => r.name_id),

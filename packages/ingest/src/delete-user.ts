@@ -58,6 +58,8 @@ export async function deleteUser(
       events: 0,
       sessions: 0,
       stepState: 0,
+      alerts: 0,
+      leaks: 0,
     };
 
     // Children before parents, so no foreign key ever has to cascade.
@@ -89,6 +91,31 @@ export async function deleteUser(
       'DELETE FROM sessions WHERE project_id = $1 AND user_key = $2',
       [db.projectId, user.user_key],
     );
+
+    /*
+     * The two tables that identify a person by `subject_key`, not `user_key`.
+     *
+     * `leak_instances` and `alerts` can be about a user, an account or a STEP, so
+     * their subject column is a plain integer with no foreign key — which means
+     * nothing cascades when the person goes. Everything else that holds a
+     * `user_key` has an ON DELETE CASCADE to `end_users` and goes by itself.
+     *
+     * This matters more than tidiness on a paid project: an alert's stored sentence
+     * can name the person, so leaving the row behind would leave their name in the
+     * feed after they asked to be erased. `subject_kind` is checked so a step's
+     * collapse alert is never deleted because a user happened to share its id.
+     */
+    counts.alerts = await db.exec(
+      `DELETE FROM alerts
+        WHERE project_id = $1 AND subject_kind = 'user' AND subject_key = $2`,
+      [db.projectId, user.user_key],
+    );
+    counts.leaks = await db.exec(
+      `DELETE FROM leak_instances
+        WHERE project_id = $1 AND subject_kind = 'user' AND subject_key = $2`,
+      [db.projectId, user.user_key],
+    );
+
     await db.exec('DELETE FROM end_users WHERE project_id = $1 AND user_key = $2', [
       db.projectId,
       user.user_key,

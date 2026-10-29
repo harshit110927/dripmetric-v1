@@ -29,6 +29,7 @@ import {
   type WorstStepFact,
 } from '@dripmetric/engine';
 import { currentFunnelReport } from '../funnel/aggregate.js';
+import { trackingProblems } from '../health/run.js';
 import { intentSummary } from '../intent/state.js';
 import { leakSummary } from '../leaks/sweeps.js';
 
@@ -86,27 +87,24 @@ export async function weeklyReportFacts(
   /*
    * Part 5: tracking health, "only when something is broken".
    *
-   * Until M11 builds the missing-event and shape-drift watches, the honest source is
-   * the coverage table: a metric that is OFF because an event is not wired is a real
-   * problem a founder can fix, and saying so beats an empty section.
+   * Two sources, in order of what a founder should act on first. A tracking FINDING
+   * (M11) is something that broke — an event that stopped arriving, a property that
+   * changed type — and comes with its own sentence that blames the tracking rather
+   * than the users. A switched-off metric is weaker: nothing broke, an event was
+   * never wired.
    *
-   * Capped at three. The section exists to prompt one action, and a project that has
-   * wired nothing would otherwise turn the week's report into a setup checklist it
-   * already has a screen for.
-   */
-  /*
-   * ...and only once the project has some activity.
-   *
-   * A project that has never sent an event has nothing BROKEN; it is simply not set
-   * up yet, and it has a setup screen for that. Listing its switched-off metrics
-   * every Monday would turn the report into a checklist and make `empty` false
-   * forever, so a brand-new project would get a weekly email saying nothing happened.
+   * Only once the project has activity, and capped at three. A project that has never
+   * sent an event has nothing broken; it is simply not set up, and it has a setup
+   * screen for that. Without the gate `empty` would never be true and a brand-new
+   * project would get a weekly email saying nothing happened.
    */
   const hasActivity = funnel.signedUp > 0 || intent.users > 0;
-  const trackingProblems = hasActivity
-    ? coverage(facts)
-        .switchedOff.slice(0, 3)
-        .map((off) => `${off.metric} is off: ${off.because}`)
+  const broken = await trackingProblems(db);
+  const trackingProblems_ = hasActivity
+    ? [
+        ...broken,
+        ...coverage(facts).switchedOff.map((off) => `${off.metric} is off: ${off.because}`),
+      ].slice(0, 3)
     : [];
 
   return {
@@ -128,7 +126,7 @@ export async function weeklyReportFacts(
     payersGoingQuiet: countOf('payer-going-quiet'),
     onboardingStalls: countOf('onboarding-stall'),
 
-    trackingProblems,
+    trackingProblems: trackingProblems_,
 
     /*
      * Part 6, the locked insight.

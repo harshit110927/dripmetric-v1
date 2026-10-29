@@ -159,9 +159,19 @@ function planOf(traits: Record<string, unknown>): string | null {
 // --- Writing the alert and its deliveries ----------------------------------
 
 export interface RecordAlertInput {
-  leakInstanceId: string;
+  /** Null for an alert that is not about a leak — a tracking-health finding (M11). */
+  leakInstanceId: string | null;
+  /**
+   * The idempotency key for an alert with no leak instance.
+   *
+   * `alerts`' own unique key is (project_id, leak_instance_id), and two NULLs are
+   * DISTINCT in Postgres — so without this every sweep would add another copy of the
+   * same tracking alert. Migration 0010 adds the column and a partial unique index
+   * covering only the rows that set it.
+   */
+  dedupeKey?: string | null;
   leakType: string;
-  subjectKind: 'user' | 'account' | 'step';
+  subjectKind: 'user' | 'account' | 'step' | 'tracking';
   subjectKey: number;
   firedAt: Date;
   title: string;
@@ -190,12 +200,30 @@ export async function recordAlert(
   db: ScopedDb,
   input: RecordAlertInput,
 ): Promise<{ alertId: string } | null> {
+  /*
+   * Two conflict targets, because the two kinds of alert are keyed differently.
+   *
+   * A leak alert is one per leak instance; a tracking alert has no leak instance and
+   * is one per (kind, subject, episode). Postgres needs the matching index named in
+   * the ON CONFLICT clause, so the statement differs by which key is in play rather
+   * than trying to express both at once.
+   */
+  const conflict =
+    input.leakInstanceId === null
+      ? // The index is PARTIAL, and Postgres only infers a partial index when the
+        // statement repeats its predicate — without `WHERE dedupe_key IS NOT NULL`
+        // it answers "no unique or exclusion constraint matching the ON CONFLICT
+        // specification", which reads like a missing index rather than a missing
+        // clause.
+        'ON CONFLICT (project_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING'
+      : 'ON CONFLICT (project_id, leak_instance_id) DO NOTHING';
+
   const alert = await db.maybeOne<{ id: string }>(
     `INSERT INTO alerts
        (project_id, leak_instance_id, leak_type, subject_kind, subject_key,
-        title, says, fields, masked, fired_at, route, because)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
-     ON CONFLICT (project_id, leak_instance_id) DO NOTHING
+        title, says, fields, masked, fired_at, route, because, dedupe_key)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13)
+     ${conflict}
      RETURNING id`,
     [
       db.projectId,
@@ -210,6 +238,7 @@ export async function recordAlert(
       input.firedAt,
       input.route,
       input.because.slice(0, 500),
+      input.dedupeKey ?? null,
     ],
   );
   if (!alert) return null;

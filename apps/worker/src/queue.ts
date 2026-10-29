@@ -182,6 +182,16 @@ export const QUEUES = {
   weeklyReportFor: 'weekly-report-for',
   /** The daily digest for one project, if it is due there (M10). */
   dailyDigestFor: 'daily-digest-for',
+  /** Hourly: watch the tracking itself (M11). */
+  trackingHealth: 'tracking-health',
+  /** Hourly, fanning out: which projects to check (M11). */
+  trackingHealthFanOut: 'tracking-health-fan-out',
+  /** Nightly: summaries first, then delete raw events past the window (M11). */
+  retention: 'retention',
+  /** Nightly, fanning out: the same (M11). */
+  retentionFanOut: 'retention-fan-out',
+  /** Nightly: stop ingesting for unclaimed projects at 14 days, delete at 30 (M11). */
+  unclaimedSweep: 'unclaimed-sweep',
 } as const;
 
 /**
@@ -219,4 +229,15 @@ export const QUEUE_POLICIES: Partial<Record<string, QueuePolicy>> = {
   [QUEUES.reportFanOut]: 'short',
   [QUEUES.weeklyReportFor]: 'short',
   [QUEUES.dailyDigestFor]: 'short',
+  [QUEUES.trackingHealth]: 'short',
+  [QUEUES.trackingHealthFanOut]: 'short',
+  /*
+   * Retention is `short` for a reason worth stating: two passes for one project at
+   * once would both pick the oldest remaining day and issue overlapping DELETEs.
+   * `retention_runs`' unique key already makes the second a no-op, but not before it
+   * has written a summary and started deleting.
+   */
+  [QUEUES.retention]: 'short',
+  [QUEUES.retentionFanOut]: 'short',
+  [QUEUES.unclaimedSweep]: 'short',
 };

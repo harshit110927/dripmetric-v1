@@ -1502,3 +1502,88 @@ open for nothing. The badge renders from the server's count, so it is right befo
 JavaScript runs, and the 30-second poll only keeps it right. It pauses while the tab
 is hidden, because a background tab polling forever is how a dashboard becomes the
 reason a laptop fan is on.
+
+### 2026-10-29 · `deleteUser` was missing two tables, and the list was the bug
+
+It deleted from a hand-written list written in M4. `leak_instances` (M8) and `alerts`
+(M10) identify their subject with a plain `subject_key` — the subject can be a user,
+an account or a step — so neither has a foreign key to `end_users` and nothing
+cascaded when a person was erased. On a paid project an alert's stored sentence can
+name them, so the name stayed in the feed after the deletion.
+
+Fixed, and then the test was rewritten to make the class of bug impossible: it asks
+`information_schema` for every table with a `user_key` column, plus every table that
+has both `subject_key` and `subject_kind`, and asserts no row survives for the deleted
+key. It also asserts the table COUNT is above a floor, because a catalogue query that
+matched nothing would otherwise pass vacuously.
+
+This is the second time a hand-maintained list of tables has been wrong in this
+project — `resetData` had drifted across five copies — so the rule is now: if a list
+tracks the schema, derive it from the schema.
+
+### 2026-10-29 · The missing-event baseline excludes the window it judges
+
+If the 14-day baseline included the last 24 hours, an outage would drag its own
+baseline down: the longer `Signed Up` stayed broken, the lower "normal" would look,
+until the check quietly stopped firing. The baseline window ends where the recent
+window begins.
+
+The threshold is per event and taken from the founder's own history, so a product with
+five signups a day and one with five hundred both get a useful answer, and nothing
+under three a day has a baseline at all — a quiet Sunday is not an outage.
+
+### 2026-10-29 · A tracking finding needs its own idempotency key
+
+`alerts`' unique key is (project_id, leak_instance_id), and a tracking alert has no
+leak instance. Two NULLs are DISTINCT in Postgres, so every sweep would have inserted
+another copy. Migration 0010 adds `dedupe_key` with a PARTIAL unique index covering
+only the rows that set it.
+
+Postgres then needs the index's predicate repeated in the statement:
+`ON CONFLICT (project_id, dedupe_key) WHERE dedupe_key IS NOT NULL`. Without the
+`WHERE` it reports "no unique or exclusion constraint matching the ON CONFLICT
+specification", which reads like a missing index and is really a missing clause.
+
+### 2026-10-29 · Retention deletes by time range, not by id or LIMIT
+
+Brief §10 asks for batches "so the table can be partitioned by month later". A delete
+bounded by `occurred_at` becomes a partition drop once `events` is partitioned; one
+bounded by anything else stays a full scan. Each batch takes the oldest remaining day,
+so the ranges are contiguous and the loop ends naturally.
+
+Summaries are written FIRST, inside the same job rather than as a separate scheduled
+pass — a summary is derived from raw events, so deleting first would destroy the only
+source it could come from. `retention_runs` records both halves, because after the
+events are gone that row is the only evidence the order was respected.
+
+### 2026-10-29 · Unclaimed projects are stopped by revoking their keys
+
+Brief §9: unclaimed projects stop ingesting at 14 days and are deleted at 30. The stop
+is a key revocation rather than a new flag, because ingest already refuses a revoked
+key — so the hot path gains no branch, and a founder who later claims the project gets
+a clear "rotate your key" instead of silently working again.
+
+### 2026-10-29 · The audit log shows full timestamps on purpose
+
+Everywhere else a time is coarse, so a masked alert cannot be matched against the
+founder's own logs. The audit log is the opposite job: it is the record of what was
+done to the project, and "this week" would make it useless for answering when the list
+price changed. It also shows the actor's email — a founder's teammate, not an end
+user; the masking gate is about the people a founder tracks, not about the founder.
+
+### 2026-10-29 · The legal pages say they are placeholders
+
+Unreviewed text that reads like a privacy policy is worse than a stated gap: a founder
+could believe it covers them, and it would be the one page making a promise nobody
+checked. What they do state is what the code actually does — encryption at rest,
+`DELETE /v1/users/:userId`, the retention windows, and that the AI scrubber strips
+personal data before a prompt — because that part is true today and is what someone
+evaluating us needs.
+
+### 2026-10-29 · A backtick in a SQL template literal, for the fourth time
+
+Writing a SQL comment inside a `` ` ``-quoted string and using backticks for emphasis
+inside it ends the literal and produces a cascade of "',' expected" errors pointing at
+prose. It has now happened in M6, twice in M8, and again in M11's dictionary upsert.
+Rule for future comments inside SQL strings: no backticks, ever — name columns in
+plain words.
