@@ -30,6 +30,23 @@ export async function resetData(): Promise<void> {
   try {
     await client.query("SET lock_timeout = '10s'");
     for (const table of [
+      /*
+       * `changes` goes first, before `funnel_steps`.
+       *
+       * Its foreign key is composite — (project_id, step_id) REFERENCES funnel_steps
+       * ON DELETE SET NULL — so deleting a step tries to NULL both columns, and
+       * `project_id` is NOT NULL. Deleting the changes first is the only order that
+       * works, and the error it otherwise throws names `changes.project_id`, which
+       * points nowhere near `funnel_steps`.
+       */
+      'changes',
+      'alert_deliveries',
+      'alerts',
+      'integration_installs',
+      'integrations',
+      'report_subscriptions',
+      'report_runs',
+      'leak_instances',
       'events',
       'user_step_state',
       'daily_event_counts',

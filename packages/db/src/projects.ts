@@ -323,3 +323,31 @@ export async function projectsWithFunnels(): Promise<number[]> {
     { worker: true },
   );
 }
+
+/**
+ * Every live project, for the sweeps that are not about the funnel (M10).
+ *
+ * `projectsWithFunnels` is right for the funnel and leak sweeps — without a
+ * confirmed funnel there is no step state to aggregate. It is wrong for alerts and
+ * for the weekly report: the report's own headline is "N users with buying intent
+ * didn't pay", which needs no funnel at all, and a founder who has wired events but
+ * not yet confirmed their steps is exactly the founder most worth emailing.
+ *
+ * Test-mode projects are excluded. A founder's sandbox should never send them mail.
+ */
+export async function activeProjects(): Promise<number[]> {
+  return withoutProject(
+    'worker-sweep',
+    async (db) => {
+      const rows = await db.query<{ id: number }>(
+        `SELECT p.id
+           FROM projects p
+          WHERE p.deleted_at IS NULL
+            AND p.mode = 'live'
+          ORDER BY p.id`,
+      );
+      return rows.map((row) => row.id);
+    },
+    { worker: true },
+  );
+}

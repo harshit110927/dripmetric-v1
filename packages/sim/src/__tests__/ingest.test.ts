@@ -1,13 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import pg from 'pg';
 import { closePools, confirmMapping, createProject, inbox, withProject } from '@dripmetric/db';
-import { loadRootEnv, runMigrations } from '@dripmetric/db/admin';
 import type { AskOptions, AskResult } from '@dripmetric/engine';
 import { queueRecompute, recomputeProject, runSuggestions } from '@dripmetric/ingest';
 import { runSimulation } from '../run.js';
 import { configureProject } from '../setup.js';
 import { scoreIngest, share } from '../score.js';
 import { product } from '../products/index.js';
+import { ensureMigrated, resetData } from './db.js';
 import { keysOf, sendRun } from './send.js';
 
 /**
@@ -20,61 +19,6 @@ import { keysOf, sendRun } from './send.js';
  * in CI without a server. The code path is identical — a route handler is a thin
  * adapter over `handleBatch`.
  */
-
-let migrated = false;
-
-async function ensureMigrated(): Promise<void> {
-  if (migrated) return;
-  loadRootEnv();
-  const client = new pg.Client({ connectionString: process.env['ADMIN_DATABASE_URL'] });
-  await client.connect();
-  try {
-    await runMigrations(client);
-    await client.query(`ALTER ROLE dripmetric_app LOGIN PASSWORD 'dripmetric_app'`);
-  } finally {
-    await client.end();
-  }
-  migrated = true;
-}
-
-async function resetData(): Promise<void> {
-  const client = new pg.Client({ connectionString: process.env['ADMIN_DATABASE_URL'] });
-  await client.connect();
-  try {
-    await client.query("SET lock_timeout = '10s'");
-    for (const table of [
-      'events',
-      'user_step_state',
-      'daily_event_counts',
-      'monthly_active_users',
-      'rate_buckets',
-      'anonymous_links',
-      'anonymous_visitors',
-      'account_members',
-      'sessions',
-      'funnel_steps',
-      'funnels',
-      'url_rules',
-      'paths',
-      'event_names',
-      'audit_log',
-      'api_keys',
-      'project_members',
-      'magic_link_tokens',
-      'founder_sessions',
-      'founder_users',
-    ]) {
-      await client.query(`DELETE FROM ${table}`);
-    }
-    await client.query('UPDATE end_users SET account_id = NULL');
-    await client.query('DELETE FROM accounts');
-    await client.query('DELETE FROM end_users');
-    await client.query("DELETE FROM projects WHERE mode = 'test'");
-    await client.query('DELETE FROM projects');
-  } finally {
-    await client.end();
-  }
-}
 
 /** Sends a run through the pipeline the way the HTTP loader does. */
 

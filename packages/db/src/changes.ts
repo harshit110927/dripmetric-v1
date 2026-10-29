@@ -173,3 +173,92 @@ export async function unfreezeThresholds(db: ScopedDb, actorUserId: string | nul
 function numberOrNull(value: string | null): number | null {
   return value === null ? null : Number(value);
 }
+
+/**
+ * How many people entered and completed a step inside each window (brief §9).
+ *
+ * Counted from `user_step_state`'s `first_entered_at` and `first_completed_at` — the
+ * FIRST time each person reached and finished the step, which is what the funnel's
+ * own aggregates count, so the Changes module and the funnel cannot disagree about
+ * what "entered" means.
+ *
+ * A person is counted in the window their first entry falls in, so someone who
+ * entered before the change and completed after it stays on the "before" side. That
+ * is the honest attribution: the change cannot have affected how they arrived.
+ *
+ * The windows arrive already computed by the engine — equal lengths either side,
+ * capped by the plan — because the comparison is only honest if the two sides match,
+ * and that is an arithmetic decision rather than a SQL one (CLAUDE.md rule 9).
+ */
+export interface ChangeWindowCounts {
+  stepLabel: string;
+  before: { entered: number; completed: number };
+  after: { entered: number; completed: number };
+}
+
+export async function changeWindowCounts(
+  db: ScopedDb,
+  stepId: number,
+  windows: {
+    before: { from: Date; to: Date };
+    after: { from: Date; to: Date };
+  },
+): Promise<ChangeWindowCounts> {
+  const row = await db.one<{
+    label: string;
+    before_entered: string;
+    before_completed: string;
+    after_entered: string;
+    after_completed: string;
+  }>(
+    `SELECT s.label,
+            count(*) FILTER (WHERE e.first_entered_at >= $3
+                               AND e.first_entered_at < $4) AS before_entered,
+            count(*) FILTER (WHERE e.first_entered_at >= $3 AND e.first_entered_at < $4
+                               AND e.first_completed_at IS NOT NULL) AS before_completed,
+            count(*) FILTER (WHERE e.first_entered_at >= $5
+                               AND e.first_entered_at < $6) AS after_entered,
+            count(*) FILTER (WHERE e.first_entered_at >= $5 AND e.first_entered_at < $6
+                               AND e.first_completed_at IS NOT NULL) AS after_completed
+       FROM funnel_steps s
+       LEFT JOIN user_step_state e
+              ON e.project_id = s.project_id AND e.step_id = s.id
+      WHERE s.project_id = $1 AND s.id = $2
+      GROUP BY s.id, s.label`,
+    [
+      db.projectId,
+      stepId,
+      windows.before.from,
+      windows.before.to,
+      windows.after.from,
+      windows.after.to,
+    ],
+  );
+
+  return {
+    stepLabel: row.label,
+    before: { entered: Number(row.before_entered), completed: Number(row.before_completed) },
+    after: { entered: Number(row.after_entered), completed: Number(row.after_completed) },
+  };
+}
+
+/**
+ * Freezes the comparison (brief §9: "Freeze the result when it is computed").
+ *
+ * `WHERE result IS NULL` so a frozen result is never overwritten. Once a founder has
+ * been told their change moved completion from 40% to 60%, that sentence is part of
+ * the record; recomputing it next week against a wider window would quietly rewrite
+ * what they were told.
+ */
+export async function storeChangeResult(
+  db: ScopedDb,
+  changeId: string,
+  result: unknown,
+): Promise<boolean> {
+  const updated = await db.exec(
+    `UPDATE changes SET result = $3::jsonb
+      WHERE project_id = $1 AND id = $2 AND result IS NULL`,
+    [db.projectId, changeId, JSON.stringify(result)],
+  );
+  return updated > 0;
+}

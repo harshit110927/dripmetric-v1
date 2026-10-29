@@ -123,3 +123,14 @@ export {
   postWebhook,
 } from './alerts/dispatch.js';
 export type { DeliveryResult, DispatchResult, PostWebhook } from './alerts/dispatch.js';
+export {
+  runWeeklyReport,
+  runDailyDigest,
+  weeklyReportFacts,
+  changeComparisons,
+  compareOneChange,
+  REPORT_WEEKDAY,
+  REPORT_HOUR,
+  DIGEST_HOUR,
+} from './alerts/reports.js';
+export type { OutgoingEmail, ReportRunResult, SendEmail } from './alerts/reports.js';

@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import pg from 'pg';
 import {
   closePools,
   createProject,
@@ -10,7 +9,6 @@ import {
   stepTrendRows,
   withProject,
 } from '@dripmetric/db';
-import { loadRootEnv, runMigrations } from '@dripmetric/db/admin';
 import { MIN_COMPLETIONS_FOR_PERCENTILES } from '@dripmetric/engine';
 import {
   currentFunnelReport,
@@ -22,6 +20,7 @@ import {
 import { runSimulation } from '../run.js';
 import { configureProject } from '../setup.js';
 import { product } from '../products/index.js';
+import { ensureMigrated, resetData } from './db.js';
 import { keysOf, sendRun } from './send.js';
 import { share } from '../score.js';
 import type { TruthFile } from '../types.js';
@@ -49,72 +48,6 @@ const SIM_LOAD_TIMEOUT_MS = 1_200_000;
  * they finished and where they stalled — so these are comparisons against a known
  * answer rather than against the engine's own output.
  */
-
-let migrated = false;
-
-async function ensureMigrated(): Promise<void> {
-  if (migrated) return;
-  loadRootEnv();
-  const client = new pg.Client({ connectionString: process.env['ADMIN_DATABASE_URL'] });
-  await client.connect();
-  try {
-    await runMigrations(client);
-    await client.query(`ALTER ROLE dripmetric_app LOGIN PASSWORD 'dripmetric_app'`);
-  } finally {
-    await client.end();
-  }
-  migrated = true;
-}
-
-async function resetData(): Promise<void> {
-  const client = new pg.Client({ connectionString: process.env['ADMIN_DATABASE_URL'] });
-  await client.connect();
-  try {
-    await client.query("SET lock_timeout = '10s'");
-    for (const table of [
-      'daily_summaries',
-      'retention_cohorts',
-      'step_segment_daily',
-      'step_daily',
-      'step_hourly',
-      'step_thresholds',
-      'changes',
-      'user_step_sessions',
-      'events',
-      'user_step_state',
-      'daily_event_counts',
-      'monthly_active_users',
-      'rate_buckets',
-      'anonymous_links',
-      'anonymous_visitors',
-      'account_members',
-      'sessions',
-      'funnel_steps',
-      'funnels',
-      'url_rules',
-      'paths',
-      'event_name_properties',
-      'event_names',
-      'recompute_runs',
-      'product_facts',
-      'audit_log',
-      'api_keys',
-      'project_members',
-      'magic_link_tokens',
-      'founder_sessions',
-      'founder_users',
-    ]) {
-      await client.query(`DELETE FROM ${table}`);
-    }
-    await client.query('UPDATE end_users SET account_id = NULL');
-    await client.query('DELETE FROM accounts');
-    await client.query('DELETE FROM end_users');
-    await client.query("DELETE FROM projects WHERE mode = 'test'");
-    await client.query('DELETE FROM projects');
-  } finally {
-    await client.end();
-  }
-}
 
 /** Sends a run through the pipeline the way the HTTP loader does. */
 

@@ -166,6 +166,22 @@ export const QUEUES = {
   recomputeSweep: 'recompute-sweep',
   /** After ingest: refresh one user's intent score (M7). */
   recomputeIntent: 'recompute-intent',
+  /** Every 5 minutes: decide and deliver this project's alerts (M10). */
+  dispatchAlerts: 'dispatch-alerts',
+  /** Every 5 minutes, fanning out: which projects to dispatch for (M10). */
+  alertFanOut: 'alert-fan-out',
+  /**
+   * HOURLY, fanning out, for both reports (M10).
+   *
+   * Hourly rather than weekly because "Monday morning in the founder's timezone"
+   * cannot be one cron: the job asks each project whether it is Monday 08:00 THERE
+   * yet, and `report_runs` makes the answer idempotent.
+   */
+  reportFanOut: 'report-fan-out',
+  /** The weekly leak report for one project, if it is due there (M10). */
+  weeklyReportFor: 'weekly-report-for',
+  /** The daily digest for one project, if it is due there (M10). */
+  dailyDigestFor: 'daily-digest-for',
 } as const;
 
 /**
@@ -190,4 +206,17 @@ export const QUEUE_POLICIES: Partial<Record<string, QueuePolicy>> = {
   // One pending aggregate per project: two would recompute the same rows.
   [QUEUES.funnelHourly]: 'short',
   [QUEUES.dailySummaries]: 'short',
+  /*
+   * The alert queues are `short` for a reason that matters more than efficiency.
+   *
+   * Two dispatch jobs for one project running at once would both read the same
+   * "sent today" count and both think they had room, so the 10-a-day cap could be
+   * exceeded. The unique index on `alerts` stops a duplicate alert; nothing but this
+   * stops a duplicate COUNT.
+   */
+  [QUEUES.dispatchAlerts]: 'short',
+  [QUEUES.alertFanOut]: 'short',
+  [QUEUES.reportFanOut]: 'short',
+  [QUEUES.weeklyReportFor]: 'short',
+  [QUEUES.dailyDigestFor]: 'short',
 };

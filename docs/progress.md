@@ -219,18 +219,51 @@ The masked rows carry a tag, an email hint, a fixed-width bar and a coarse time,
 nothing else: there is no identifier on a masked page at all, which is why the reveal
 button posts the tag and the server resolves it.
 
-## M10 · Alerts and reports — `[ ]`
+## M10 · Alerts and reports — `[x]`
 
 **Build:** Slack and Discord OAuth (against mocks), encrypted webhook URLs, the in-app feed
 with an unread badge, the 10-a-day cap, quiet hours, the daily digest, Resend system email,
 the weekly report, the Changes comparison, the dev preview route.
 
-- [ ] a Monday run produces the 8-part report with correct numbers
-- [ ] the 11th alert in a day goes only to the feed
-- [ ] an alert in quiet hours is held until morning
-- [ ] payloads match the samples in Slack's and Discord's docs
-- [ ] no alert for a paid, deleted or opted-out user
-- [ ] Changes says "too early to tell" under 100 users per window
+- [x] a Monday run produces the 8-part report with correct numbers — the eight parts
+      in the brief's order (`reports.test.ts` asserts the key list), the subject is
+      "7 users with buying intent didn't pay last week" over 7 seeded high-intent
+      non-payers, and the payback line is `ceil(24.99 / price)`: $9.00 → "saving 3".
+      It is skipped on a Sunday, before 08:00 local, and a second time the same week.
+- [x] the 11th alert in a day goes only to the feed — 10 posted, the 11th in the feed
+      saying "that is 10 alerts today, which is the daily limit", and the cap survives
+      a second sweep because it counts what was SENT, not what was decided
+- [x] an alert in quiet hours is held until morning — raised 23:30 Berlin, nothing
+      posted overnight, delivered at 08:00 local the next day. A held alert spends a
+      slot in the cap, so a quiet night cannot stack thirty posts for 08:00.
+- [x] payloads match the samples in Slack's and Discord's docs — both verified against
+      the live docs on 2026-10-29 and enforced in code: Slack sets `text` alongside
+      Block Kit `blocks` (its own advanced sample does, and without it a phone push
+      reads "This content can't be displayed"); Discord's maxima including the 6,000
+      across the message. The embed carries NO timestamp, because Discord renders it
+      to the minute and a masked alert with a minute on it can be matched against the
+      founder's own logs.
+- [x] no alert for a paid, deleted or opted-out user — driven over all four guards
+      (internal too). The guards are re-checked at SEND time against fresh facts, so
+      a leak found on Monday for someone who paid on Tuesday is dropped on Wednesday.
+      Nothing is written to the feed either: the feed is a list of things to act on.
+- [x] Changes says "too early to tell" under 100 users per window — 120 before and 40
+      after reads "60 more users on the thinner side"; 150/150 prints "went from 40.0%
+      to 60.0% across 300 users" and freezes, so reading it a week later gives the
+      same sentence the founder was already told.
+
+**Also:** 15 alert + 15 report integration tests against a real database, 55 engine
+tests. The OAuth flow runs unchanged against a mock at `/dev/oauth/<kind>/<step>` —
+same state nonce, same single-use spend, same code exchange; only the host differs.
+`/dev/preview?project=<id>` renders the report and an example alert from the same
+engine functions the jobs use, with `&as=text|slack|discord`.
+
+Three real bugs the tests found: `changeWindowCounts` was written against
+`entered_at`/`completed_at`, which do not exist (`first_entered_at` /
+`first_completed_at` do); `resetData` deleted `funnel_steps` before `changes`, whose
+composite `ON DELETE SET NULL` then tried to null a NOT NULL `project_id`; and a
+project that had never sent an event would have been emailed every Monday about its
+switched-off metrics, which is not broken tracking but an empty setup screen.
 
 ## M11 · Tracking health, retention and deletion — `[ ]`
 

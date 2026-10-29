@@ -1,6 +1,9 @@
 import { closePools, withoutProject } from '@dripmetric/db';
 import { loadRootEnv } from '@dripmetric/db/admin';
 import {
+  runAlertDispatch,
+  runDailyDigest,
+  runWeeklyReport,
   pendingRecomputeProjects,
   recomputeChunk,
   runCollapseSweep,
@@ -11,8 +14,9 @@ import {
   runLeakSweep,
   writeLeakSummary,
 } from '@dripmetric/ingest';
-import { projectsWithFunnels, withProject } from '@dripmetric/db';
+import { activeProjects, projectsWithFunnels, withProject } from '@dripmetric/db';
 import { QUEUE_POLICIES, QUEUES, startQueue, type Queue } from './queue.js';
+import { sendSystemEmail } from './mailer.js';
 import { log } from './log.js';
 
 /**
@@ -173,6 +177,71 @@ async function main(): Promise<void> {
   });
   await queue.work(QUEUES.dailySummariesSweep, () => fanOut(queue, QUEUES.dailySummaries, 'daily'));
 
+  /*
+   * Alerts (brief §9, M10).
+   *
+   * Decide then deliver, both inside one job: a held alert's `due_at` is what makes
+   * the quiet-hours wait survive a restart, so the deliver half has to run on every
+   * sweep and not only when something new was decided.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.dispatchAlerts, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runAlertDispatch(job.data.projectId, new Date());
+      if (result.recorded > 0 || result.sent > 0 || result.failed > 0) {
+        log.info('alerts', { projectId: job.data.projectId, ...result });
+      }
+    }
+  });
+
+  // Every live project, not only those with a funnel: see `activeProjects`.
+  await queue.work(QUEUES.alertFanOut, () => fanOutAll(queue, QUEUES.dispatchAlerts, 'alerts'));
+
+  /*
+   * The two reports (brief §9, M10).
+   *
+   * The fan-out is HOURLY and the per-project job decides whether it is due where
+   * the founder is. "Monday morning in the founder's timezone" cannot be a single
+   * cron expression, and `report_runs`' unique index on the founder's own local date
+   * is what stops a second copy.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.weeklyReportFor, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runWeeklyReport(job.data.projectId, new Date(), {
+        send: sendSystemEmail,
+        appUrl: process.env['APP_URL'] ?? null,
+      });
+      if (result.ran) {
+        log.info('weekly report sent', {
+          projectId: job.data.projectId,
+          recipients: result.recipients,
+          subject: result.subject,
+        });
+      } else {
+        log.debug('weekly report skipped', { projectId: job.data.projectId, why: result.why });
+      }
+    }
+  });
+
+  await queue.work<{ projectId: number }>(QUEUES.dailyDigestFor, async (jobs) => {
+    for (const job of jobs) {
+      const result = await runDailyDigest(job.data.projectId, new Date(), {
+        send: sendSystemEmail,
+        appUrl: process.env['APP_URL'] ?? null,
+      });
+      if (result.ran) {
+        log.info('digest sent', {
+          projectId: job.data.projectId,
+          recipients: result.recipients,
+        });
+      }
+    }
+  });
+
+  await queue.work(QUEUES.reportFanOut, async () => {
+    await fanOutAll(queue, QUEUES.weeklyReportFor, 'weekly');
+    await fanOutAll(queue, QUEUES.dailyDigestFor, 'digest');
+  });
+
   // Every 5 minutes, and hourly for the collapse test (brief §8.3).
   await queue.schedule(QUEUES.leakSweepFanOut, '*/5 * * * *');
   await queue.schedule(QUEUES.collapseFanOut, '23 * * * *');
@@ -189,6 +258,14 @@ async function main(): Promise<void> {
   await queue.schedule(QUEUES.dailySummariesSweep, '11 2 * * *');
   // Every minute: a founder who changes a mapping should not wait five.
   await queue.schedule(QUEUES.recomputeSweep, '* * * * *');
+  /*
+   * Alerts every 5 minutes, two minutes after the leak sweep, so a leak found at
+   * :05 is alerted at :07 rather than waiting for the next pass.
+   */
+  await queue.schedule(QUEUES.alertFanOut, '2-59/5 * * * *');
+  // Hourly at :19. Each project's own job decides whether it is Monday morning or
+  // evening THERE; this only has to come round often enough not to miss an hour.
+  await queue.schedule(QUEUES.reportFanOut, '19 * * * *');
 
   const health = setInterval(() => {
     void reportHealth(queue);
@@ -208,6 +285,22 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+}
+
+/**
+ * Sends one job per LIVE project, funnel or not.
+ *
+ * The alert and report sweeps use this rather than `fanOut`: a founder who has wired
+ * events but not yet confirmed their funnel still has intent scores, still has leaks
+ * that do not depend on steps, and is the founder most worth emailing.
+ */
+async function fanOutAll(queue: Queue, target: string, label: string): Promise<void> {
+  const projects = await activeProjects();
+  if (projects.length === 0) return;
+  for (const projectId of projects) {
+    await queue.send(target, { projectId }, { singletonKey: `${label}:${projectId}` });
+  }
+  log.debug('sweep', { pass: label, projects: projects.length });
 }
 
 /** Sends one job per project that has a funnel to aggregate. */

@@ -1443,3 +1443,62 @@ class of bug shows up at all.
 Worth remembering for the publishing step: the examples app is the one consumer that
 resolves the SDK through its `exports` map the way a customer will, so "does the SDK
 build before the thing that imports it" is a question with a real answer.
+
+### 2026-10-29 · The report sweep is hourly and asks each project "is it Monday there?"
+
+"Monday morning in the founder's timezone" cannot be one cron expression: a single
+schedule is Monday 08:00 in exactly one zone. So the fan-out runs hourly for every
+live project and the per-project job decides, from `now` and the project's own zone,
+whether it is Monday and past 08:00 there.
+
+`report_runs` carries the founder's own LOCAL date as the period key, and its unique
+index is what stops a founder in Auckland getting two. The same shape gives the daily
+digest its once-a-day guarantee for free.
+
+The sweeps use `activeProjects()` rather than `projectsWithFunnels()`. The funnel and
+leak sweeps are right to need a confirmed funnel — without one there is no step state
+to aggregate — but the report's own headline is "N users with buying intent didn't
+pay", which needs no funnel, and a founder who has wired events but not yet confirmed
+their steps is the founder most worth emailing. Test-mode projects are excluded: a
+sandbox must never send mail.
+
+### 2026-10-29 · A week with nothing in it gets no email, and an empty project is not "broken"
+
+`weeklyReport()` returns `empty` and the job records the skip rather than sending.
+A Monday email that says "nothing happened" every week is how a founder learns to
+filter us.
+
+Part 5 (tracking health) is "only when something is broken", and the first version
+made that false forever: a project that had never sent an event has every metric
+switched off, so `empty` was never true and a brand-new project would have been
+emailed weekly about its own setup. Switched-off metrics are now reported only once
+the project has activity, and capped at three — the section exists to prompt one
+action, not to duplicate the setup screen.
+
+### 2026-10-29 · Installing a chat app also selects it
+
+The OAuth callback sets `alertChannel` as well as storing the webhook. A founder who
+has just connected Slack means "send my alerts there"; leaving the setting on `none`
+would make the install appear to work and change nothing.
+
+The state nonce is spent BEFORE the code is exchanged, in an UPDATE whose own WHERE
+clause requires it unused — so a replayed callback fails before a credential is ever
+requested. Errors come back as a message on the settings page, because the founder is
+in a browser mid-flow and "Slack refused the install" is something they can act on.
+
+### 2026-10-29 · The dev OAuth mock returns a `.test` webhook on purpose
+
+`https://hooks.slack.test/...` can never resolve: `.test` is reserved by RFC 6761. A
+dev install therefore cannot reach a real workspace, and what dev exercises is the
+dispatcher's FAILURE path — the half most likely to be wrong. The mock is refused in
+production, where it would otherwise hand anyone a working "install" that posts
+nowhere.
+
+### 2026-10-29 · The unread badge polls, and stops when the tab is hidden
+
+Server-sent events would hold a connection per founder for a number that changes when
+a five-minute sweep finds something — on a serverless host, a function instance held
+open for nothing. The badge renders from the server's count, so it is right before any
+JavaScript runs, and the 30-second poll only keeps it right. It pauses while the tab
+is hidden, because a background tab polling forever is how a dashboard becomes the
+reason a laptop fan is on.
