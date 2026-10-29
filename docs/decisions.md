@@ -773,3 +773,131 @@ would eventually stop meaning the same thing.
 Confirming "which event means someone has paid" when no such event exists would
 record a decision about nothing, and every screen would then claim a fact it does not
 have.
+
+### 2026-10-29 · `visits` is recounted from a set, not accumulated
+
+Every other column in `user_step_state` accumulates, which is what makes a replay safe
+for them: the sum of the same events, the earliest of the same times. A count of
+distinct sessions cannot work that way — adding this batch's count to the stored one
+counts a returning visitor's session twice the moment two batches mention it, and the
+old code could only ever see one batch, so it undercounted every returning user.
+
+`user_step_sessions` holds one row per (person, step, session) and `visits` is set
+from a count of it. A set is idempotent, so the same property is reached from the
+other direction. The table earns its keep twice: the segment splits now attribute a
+step to the session the person was actually in, so someone who starts a step on a
+phone and finishes on a laptop is counted where they were — which is the exact case
+the splits exist to find.
+
+A step touched only by server events records no sessions and reports `visits` 0. That
+is honest: we know the person did something and not which visit it belonged to.
+Inventing a visit would put one on a timeline that never happened, and the browser and
+server share is what tracking health reports (M11).
+
+### 2026-10-29 · "Reached a step" is not "entered at a known time"
+
+A step defined by a canonical event — `Signed Up`, `Activated` — has no entry event of
+its own. The only thing that arrives is the completion, so `first_entered_at` is null
+while `first_completed_at` is set.
+
+Filtering a step's population on `first_entered_at` therefore read 0 people entered
+against 166 completions, and the drop-off came out negative. `StepTiming.reached` is
+now the population test and `enteredAt` stays what it says it is.
+
+The consequence is deliberate and visible: such a step shows a drop-off and no
+duration. `elapsedSeconds` is null, so no median, and the screen says why. Setting the
+entry time to the completion time would have produced a median of zero seconds for
+every server-tracked step — a number that looks like data and is not. Telling the
+founder to send `Signup Started` is the coverage checklist's job, and it is on the
+checklist for exactly this reason.
+
+### 2026-10-29 · A clock read in SQL is still a hidden clock read
+
+The 8-week trend filtered on `current_date`. Everything around it took `now` as a
+parameter, and the query quietly did not.
+
+It made the trend impossible to test over simulated data, which happens months in the
+past, and it would have answered a question about last August with the last eight
+weeks of this month. Both reads now take `now`, and an ESLint rule over the funnel
+jobs and reads rejects `current_date`, `current_timestamp` and `now()` inside a query
+there. The rule was verified by adding a `current_date` and watching lint fail.
+
+### 2026-10-29 · The no-clock rule bans reading the clock, not the Date type
+
+The engine lint rule started as a blanket ban on the `Date` global. That only looked
+right while no engine constructed a date: `new Date(iso)` and `Date.UTC(y, m, d)` are
+pure functions of their arguments, and the cohort rules need both to work out which
+week a signup falls in.
+
+The three ways to actually read a clock — `Date.now()`, `new Date()` with no
+arguments, and `performance` — are banned by name instead. A rule that forbids
+deterministic arithmetic pushes correct code into epoch-millisecond contortions and
+teaches people to reach for the escape hatch, which is worse than the rule is good.
+
+### 2026-10-29 · Thresholds freeze on the change, and freeze for every step
+
+Brief §8.1: "thresholds freeze when the founder marks a change, so a before-and-after
+comparison is not measured against a moving bar."
+
+Two choices inside that. The frozen copy lives on the `changes` row rather than on the
+step, because the step's live thresholds have to go on moving — the copy is the record
+of what the bar was. And marking a change freezes EVERY step, not just the changed
+one: a founder who shortens step 2 wants to know what it did to the whole funnel, and
+the steps after it are where the answer shows up. Freezing one step would leave every
+other step's "after" measured against a bar that moved underneath it.
+
+`applyFreeze` replaces a step's thresholds outright rather than merging. A half-frozen
+set — this percentile from before the change, that one from after — would answer "did
+my change help?" with a number that means neither.
+
+### 2026-10-29 · One highlighted step, not several
+
+Brief §8.1 ends "say which, in plain words". That only works if there is one answer: a
+funnel with four highlighted steps tells a founder to look everywhere, which is the
+same as telling them nothing. The report picks one — hardest first, then the clearest
+"they are not seeing the value", then slowest — and the rest keep their evidence
+without the highlight.
+
+The comparison behind "slow users drop three times as often" needs ten people on each
+side before it is drawn at all. Below that the ratio swings on one person, and "this
+step is three times harder for slow users" would be noise with a sentence attached.
+
+### 2026-10-29 · The funnel report is computed live; the history is stored
+
+"Users stuck now" is a present tense. A stored count would be as old as the last job
+ran, and a founder refreshing the page would see a number that does not move.
+
+So `currentFunnelReport` computes from current state on every read, bounded by the
+plan's tracked-user limit and cached for 60 seconds by the dashboard (brief §9). What
+IS stored is what is genuinely historical: the hourly and daily aggregates, the
+segment splits, the cohorts, and the daily summary — which is the row that outlives
+the raw events, since free keeps 90 days and the summaries are kept forever.
+
+The daily summary is one JSONB payload merged with `||` rather than replaced, so M7
+and M8 add their own sections to the same row without a migration each.
+
+### 2026-10-29 · The percentile definition is shared with Postgres on purpose
+
+The engine's `percentile()` interpolates linearly, which is exactly what
+`percentile_cont` does, and the daily aggregate computes the same numbers in SQL. Two
+definitions — nearest-rank in one place, interpolated in the other — would disagree by
+a few seconds on the same data, and the disagreement would look like a data bug rather
+than like two definitions.
+
+The 20-completion bar is passed into that SQL as a parameter from the engine's
+`MIN_COMPLETIONS_FOR_PERCENTILES`, so a stored row can never hand a screen a median
+the engine would have refused to show.
+
+### 2026-10-29 · A test timestamp in the future is not a timestamp
+
+The M5 sequence-position test set fixed ISO timestamps an hour ahead of when the test
+actually ran. The skew correction clamped all three to the arrival time — correct
+behaviour, it is what stops a device with a wrong clock scattering a person's events
+across the calendar — so every event shared one `occurred_at` and the sequence order
+fell to the random `message_hash`. The test passed or failed depending on the hash,
+and it had been passing.
+
+It was found by M6's funnel work, which cares about ordering. Fixtures that need an
+order now derive their timestamps from the real clock going backwards, and the comment
+says why. A fixed timestamp in a test is only safe if it is in the past of every future
+run, which a date typed today is not.

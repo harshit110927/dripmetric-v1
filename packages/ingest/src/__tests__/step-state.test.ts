@@ -146,17 +146,27 @@ describe('merging a batch\u2019s step updates', () => {
     expect(merged[0]?.activeSeconds).toBe(75);
   });
 
-  it('counts distinct sessions as visits, never fewer than one', () => {
+  /*
+   * `visits` is no longer merged to a count here.
+   *
+   * It is "separate sessions spent on the step" (brief §8.1), and a count taken from
+   * one batch could only ever know about that batch — a visitor who came back later
+   * was counted again from one. So the merge carries the SESSIONS and
+   * `applyStepUpdates` recounts them from `user_step_sessions`, which is a set.
+   */
+  it('carries the distinct sessions it saw, so visits can be recounted from them', () => {
     const twoSessions = mergeStepUpdates([
       update({ sessionId: 100 }),
       update({ sessionId: 100 }),
       update({ sessionId: 200 }),
     ]);
-    expect(twoSessions[0]?.visits).toBe(2);
+    expect(twoSessions[0]?.sessions.sort()).toEqual([100, 200]);
 
-    // A server event has no session of its own, and still counts as a visit.
+    // A server event with no session of its own records nothing: we know the person
+    // did something, but not which visit it belonged to, and inventing one would
+    // put a visit on a timeline that never happened.
     const noSession = mergeStepUpdates([update({ sessionId: null })]);
-    expect(noSession[0]?.visits).toBe(1);
+    expect(noSession[0]?.sessions).toEqual([]);
   });
 
   it('keeps different people and different steps apart', () => {

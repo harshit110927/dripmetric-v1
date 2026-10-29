@@ -62,6 +62,11 @@ function entry(entries: readonly DictionaryEntry[], rawName: string): Dictionary
 
 const NOW = new Date('2026-10-29T12:00:00Z');
 
+/** An ISO timestamp this many minutes before the real clock, so it is never clamped. */
+function ago(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
 describe('the event dictionary, the Inbox and the mock AI', () => {
   beforeAll(ensureMigrated, 60_000);
   beforeEach(resetData);
@@ -94,21 +99,30 @@ describe('the event dictionary, the Inbox and the mock AI', () => {
   it('collects property keys, shapes and sequence positions for the prompt', async () => {
     const { project, secretKey } = await newFixture();
 
+    /*
+     * The timestamps have to be in the PAST, and relative to the real clock.
+     *
+     * Fixed ISO timestamps an hour ahead of the test run were silently clamped to
+     * the arrival time by the skew correction — which is correct behaviour, it is
+     * what stops a device with a wrong clock scattering events — and all three
+     * events then shared one `occurred_at`, leaving the sequence order to the random
+     * message hash. The test passed or failed depending on the hash.
+     */
     await postBatch(
       [
         track('workspace_spun_up', {
           userId: 'u1',
-          timestamp: '2026-10-29T09:00:00.000Z',
+          timestamp: ago(60),
           properties: { plan: 'pro', seats: 3 },
         }),
         track('workspace_spun_up', {
           userId: 'u2',
-          timestamp: '2026-10-29T09:05:00.000Z',
+          timestamp: ago(55),
           properties: { plan: 'free', seats: 1 },
         }),
         track('thing_shared', {
           userId: 'u1',
-          timestamp: '2026-10-29T09:10:00.000Z',
+          timestamp: ago(50),
           properties: { channel: 'email' },
         }),
       ],

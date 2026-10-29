@@ -116,15 +116,31 @@ table; the Inbox lists the unmapped name with the meanings it may be mapped to; 
 queued `recompute_runs` row was found by the worker sweep within a minute, fanned out
 and drained to `done`.
 
-## M6 · Funnel and timing engine — `[ ]`
+## M6 · Funnel and timing engine — `[x]`
 
 **Build:** brief §8.1 as pure functions, worker jobs, hourly and daily aggregates, segment
 splits, retention cohorts (week 1 and week 4), the API the dashboard reads.
 
-- [ ] per-step drop-off, medians and stuck counts match the truth file
-- [ ] fixtures cover stuck, cooling, rushed and the highlight logic
-- [ ] thresholds freeze when a change is marked
-- [ ] percentiles appear only after 20 completions
+- [x] per-step drop-off, medians and stuck counts match the truth file
+      (`packages/sim/src/__tests__/funnel.test.ts`, one 200-person run: completions
+      exact against `stepsCompleted`, signed up / activated / paid exact against the
+      totals, and 91 of the 91 people the truth file says stalled reported as stuck
+      — 100.0%, printed by the test — with no payer counted stuck)
+- [x] fixtures cover stuck, cooling, rushed and the highlight logic
+      (`funnel-classify.test.ts` and `funnel-highlight.test.ts`: both stuck rules and
+      the Key-step-only limit, cooling before and after moving on, skimmed needing
+      both halves, and all three highlight readings with the plain sentence each
+      produces)
+- [x] thresholds freeze when a change is marked — proven by loading a second,
+      different 120-person run after the freeze and showing every bar unmoved
+- [x] percentiles appear only after 20 completions (`funnel-stats.test.ts` walks 0–19
+      and then exactly 20; the funnel test checks it against real data, including the
+      honest case: a step reached only by a server event has a drop-off and no
+      duration, because we never learn when anyone started it)
+
+Also built: `user_step_sessions`, which makes `visits` an absolute recount instead of
+a per-batch counter that undercounted every returning visitor, and gives the segment
+splits the session a person was actually in.
 
 ## M7 · Intent engine — `[ ]`
 

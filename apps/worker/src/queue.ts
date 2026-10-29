@@ -144,6 +144,12 @@ export async function startQueue(): Promise<Queue> {
 export const QUEUES = {
   /** Every 5 minutes: the leak sweeps (M8). */
   sweepLeaks: 'sweep-leaks',
+  /** Hourly: the funnel's hourly aggregates and thresholds (M6). */
+  funnelHourly: 'funnel-hourly',
+  /** Hourly, fanning out: which projects have a funnel to aggregate (M6). */
+  funnelSweep: 'funnel-sweep',
+  /** Nightly, fanning out: the same, for the daily pass (M6). */
+  dailySummariesSweep: 'daily-summaries-sweep',
   /** Hourly: the step-completion collapse test (M8). */
   checkCollapse: 'check-collapse',
   /** Nightly: summaries first, then the retention deletes (M11). */
@@ -170,4 +176,9 @@ export const QUEUE_POLICIES: Partial<Record<string, QueuePolicy>> = {
   [QUEUES.recompute]: 'short',
   // One sweep queued at a time: a second would find the same projects.
   [QUEUES.recomputeSweep]: 'short',
+  [QUEUES.funnelSweep]: 'short',
+  [QUEUES.dailySummariesSweep]: 'short',
+  // One pending aggregate per project: two would recompute the same rows.
+  [QUEUES.funnelHourly]: 'short',
+  [QUEUES.dailySummaries]: 'short',
 };

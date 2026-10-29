@@ -300,3 +300,26 @@ export async function updateSettings(
   );
   return after;
 }
+
+/**
+ * Every live project with an active funnel, for the worker's funnel sweep (M6).
+ *
+ * A project with no funnel has nothing to aggregate, and a project in test mode has
+ * numbers nobody reads. Runs outside any one project, through the named escape hatch.
+ */
+export async function projectsWithFunnels(): Promise<number[]> {
+  return withoutProject(
+    'worker-sweep',
+    async (db) => {
+      const rows = await db.query<{ id: number }>(
+        `SELECT DISTINCT p.id
+           FROM projects p
+           JOIN funnels f ON f.project_id = p.id AND f.is_active
+          WHERE p.deleted_at IS NULL
+          ORDER BY p.id`,
+      );
+      return rows.map((row) => row.id);
+    },
+    { worker: true },
+  );
+}

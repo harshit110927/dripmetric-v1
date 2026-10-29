@@ -125,15 +125,22 @@ export interface StepUpdate {
 }
 
 /** One row per (person, step), after merging everything the batch said about it. */
-interface MergedStepUpdate {
+export interface MergedStepUpdate {
   userKey: number;
   stepId: number;
   firstEnteredAt: Date | null;
   firstCompletedAt: Date | null;
   attempts: number;
-  visits: number;
   activeSeconds: number;
   lastEventAt: Date;
+  /**
+   * The sessions this batch saw on this step.
+   *
+   * Not a count. `visits` is "separate sessions spent on the step" (brief §8.1) and
+   * a count taken here could only ever know about one batch, so the sessions
+   * themselves are stored and `visits` is recounted from them.
+   */
+  sessions: number[];
 }
 
 /**
@@ -151,7 +158,7 @@ interface MergedStepUpdate {
  * summed, active time summed, latest event time.
  */
 export function mergeStepUpdates(updates: readonly StepUpdate[]): MergedStepUpdate[] {
-  const merged = new Map<string, MergedStepUpdate & { sessions: Set<number> }>();
+  const merged = new Map<string, Omit<MergedStepUpdate, 'sessions'> & { sessions: Set<number> }>();
 
   for (const update of updates) {
     const key = `${update.userKey}:${update.stepId}`;
@@ -164,7 +171,6 @@ export function mergeStepUpdates(updates: readonly StepUpdate[]): MergedStepUpda
         firstEnteredAt: null,
         firstCompletedAt: null,
         attempts: 0,
-        visits: 0,
         activeSeconds: 0,
         lastEventAt: update.at,
         sessions: new Set<number>(),
@@ -192,10 +198,7 @@ export function mergeStepUpdates(updates: readonly StepUpdate[]): MergedStepUpda
 
   return [...merged.values()].map(({ sessions, ...row }) => ({
     ...row,
-    // Distinct sessions in THIS batch. Counting them across batches needs the
-    // session stored per (person, step), which is M6's job; until then this
-    // undercounts a visitor who returns in a later batch rather than overcounting.
-    visits: Math.max(1, sessions.size),
+    sessions: [...sessions],
   }));
 }
 
@@ -212,21 +215,44 @@ export async function applyStepUpdates(
   const merged = mergeStepUpdates(updates);
   if (merged.length === 0) return;
 
+  // The sessions first, in the same transaction, so the recount below sees them.
+  await writeStepSessions(db, merged);
+
+  /*
+   * `visits` is SET, not incremented.
+   *
+   * Every other column here accumulates, which is what makes a replay safe for them
+   * (sum of the same events, earliest of the same times). A count of distinct
+   * sessions cannot accumulate: adding this batch's count to the stored one would
+   * count a returning visitor's session twice the moment two batches mentioned it.
+   * So it is recounted from `user_step_sessions`, which is a set and therefore
+   * idempotent — the same property, reached the other way round.
+   */
   await db.exec(
-    `INSERT INTO user_step_state (
+    `WITH incoming AS (
+       SELECT * FROM unnest($2::int[], $3::int[], $4::timestamptz[], $5::timestamptz[],
+                            $6::int[], $7::int[], $8::timestamptz[])
+              AS u(user_key, step_id, entered_at, completed_at, attempts, active_seconds, at)
+     ), counted AS (
+       SELECT i.user_key, i.step_id, count(s.session_id)::int AS visits
+         FROM incoming i
+         LEFT JOIN user_step_sessions s
+           ON s.project_id = $1 AND s.user_key = i.user_key AND s.step_id = i.step_id
+        GROUP BY i.user_key, i.step_id
+     )
+     INSERT INTO user_step_state (
        project_id, user_key, step_id, first_entered_at, first_completed_at,
        attempts, visits, active_seconds, last_event_at
      )
-     SELECT $1, u.user_key, u.step_id, u.entered_at, u.completed_at,
-            u.attempts, u.visits, u.active_seconds, u.at
-       FROM unnest($2::int[], $3::int[], $4::timestamptz[], $5::timestamptz[],
-                   $6::int[], $7::int[], $8::int[], $9::timestamptz[])
-            AS u(user_key, step_id, entered_at, completed_at, attempts, visits, active_seconds, at)
+     SELECT $1, i.user_key, i.step_id, i.entered_at, i.completed_at,
+            i.attempts, c.visits, i.active_seconds, i.at
+       FROM incoming i
+       JOIN counted c ON c.user_key = i.user_key AND c.step_id = i.step_id
      ON CONFLICT (project_id, user_key, step_id) DO UPDATE SET
        first_entered_at   = LEAST(user_step_state.first_entered_at,   COALESCE(EXCLUDED.first_entered_at,   user_step_state.first_entered_at)),
        first_completed_at = LEAST(user_step_state.first_completed_at, COALESCE(EXCLUDED.first_completed_at, user_step_state.first_completed_at)),
        attempts       = user_step_state.attempts + EXCLUDED.attempts,
-       visits         = user_step_state.visits + EXCLUDED.visits,
+       visits         = EXCLUDED.visits,
        active_seconds = user_step_state.active_seconds + EXCLUDED.active_seconds,
        last_event_at  = GREATEST(user_step_state.last_event_at, EXCLUDED.last_event_at)`,
     [
@@ -236,9 +262,33 @@ export async function applyStepUpdates(
       merged.map((u) => u.firstEnteredAt),
       merged.map((u) => u.firstCompletedAt),
       merged.map((u) => u.attempts),
-      merged.map((u) => u.visits),
       merged.map((u) => u.activeSeconds),
       merged.map((u) => u.lastEventAt),
     ],
+  );
+}
+
+/** One row per (person, step, session). A set, so a replay adds nothing. */
+async function writeStepSessions(db: ScopedDb, merged: readonly MergedStepUpdate[]): Promise<void> {
+  const userKeys: number[] = [];
+  const stepIds: number[] = [];
+  const sessionIds: number[] = [];
+
+  for (const row of merged) {
+    for (const sessionId of row.sessions) {
+      userKeys.push(row.userKey);
+      stepIds.push(row.stepId);
+      sessionIds.push(sessionId);
+    }
+  }
+  // A server-side event has no session of its own, so there is nothing to record.
+  if (sessionIds.length === 0) return;
+
+  await db.exec(
+    `INSERT INTO user_step_sessions (project_id, user_key, step_id, session_id)
+     SELECT $1, u.user_key, u.step_id, u.session_id
+       FROM unnest($2::int[], $3::int[], $4::bigint[]) AS u(user_key, step_id, session_id)
+     ON CONFLICT DO NOTHING`,
+    [db.projectId, userKeys, stepIds, sessionIds],
   );
 }

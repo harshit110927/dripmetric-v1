@@ -1,6 +1,12 @@
 import { closePools, withoutProject } from '@dripmetric/db';
 import { loadRootEnv } from '@dripmetric/db/admin';
-import { pendingRecomputeProjects, recomputeChunk } from '@dripmetric/ingest';
+import {
+  pendingRecomputeProjects,
+  recomputeChunk,
+  runFunnelDaily,
+  runFunnelHourly,
+} from '@dripmetric/ingest';
+import { projectsWithFunnels } from '@dripmetric/db';
 import { QUEUE_POLICIES, QUEUES, startQueue, type Queue } from './queue.js';
 import { log } from './log.js';
 
@@ -75,8 +81,48 @@ async function main(): Promise<void> {
     }
   });
 
+  /*
+   * The funnel jobs (brief §8.1, M6).
+   *
+   * Hourly: the hourly aggregates and the thresholds every screen judges a step by.
+   * Nightly: the daily aggregates, the segment splits, the retention cohorts and the
+   * daily summary, which is the row that outlives the raw events.
+   */
+  await queue.work<{ projectId: number }>(QUEUES.funnelHourly, async (jobs) => {
+    for (const job of jobs) {
+      await runFunnelHourly(job.data.projectId, new Date());
+      log.debug('funnel hourly done', { projectId: job.data.projectId });
+    }
+  });
+
+  await queue.work<{ projectId: number }>(QUEUES.dailySummaries, async (jobs) => {
+    for (const job of jobs) {
+      await runFunnelDaily(job.data.projectId, new Date());
+      log.info('funnel daily done', { projectId: job.data.projectId });
+    }
+  });
+
+  /*
+   * Two sweeps rather than one with a flag, because a scheduled pg-boss job carries
+   * no data of its own: the queue name is the only thing that can say which pass
+   * this is.
+   */
+  await queue.work(QUEUES.funnelSweep, () => fanOut(queue, QUEUES.funnelHourly, 'hourly'));
+  await queue.work(QUEUES.dailySummariesSweep, () => fanOut(queue, QUEUES.dailySummaries, 'daily'));
+
   // Every 5 minutes. Real cron with time zones arrives with the jobs that need them.
   await queue.schedule(QUEUES.sweepLeaks, '*/5 * * * *');
+  // A few minutes past the hour, so a step entered at 09:59 is in the 09:00 bucket.
+  await queue.schedule(QUEUES.funnelSweep, '7 * * * *');
+  /*
+   * The nightly pass runs at 02:11 UTC.
+   *
+   * Not on the hour and not at midnight: everyone's nightly job runs at midnight, and
+   * a daily summary written while the day is still turning over somewhere is a day
+   * boundary argument we do not need. Per-founder time zones arrive with the weekly
+   * report, which is the job that actually has to respect them (brief §9).
+   */
+  await queue.schedule(QUEUES.dailySummariesSweep, '11 2 * * *');
   // Every minute: a founder who changes a mapping should not wait five.
   await queue.schedule(QUEUES.recomputeSweep, '* * * * *');
 
@@ -98,6 +144,17 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+}
+
+/** Sends one job per project that has a funnel to aggregate. */
+async function fanOut(queue: Queue, target: string, label: string): Promise<void> {
+  const projects = await projectsWithFunnels();
+  if (projects.length === 0) return;
+
+  for (const projectId of projects) {
+    await queue.send(target, { projectId }, { singletonKey: `${label}:${projectId}` });
+  }
+  log.info('funnel sweep', { pass: label, projects: projects.length });
 }
 
 /**

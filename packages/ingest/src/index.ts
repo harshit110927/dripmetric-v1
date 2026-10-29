@@ -25,6 +25,37 @@ export {
 export type { DictionaryFactsResult } from './dictionary-facts.js';
 export { runSuggestions, promptInputFrom } from './suggest-run.js';
 export type { SuggestionRun } from './suggest-run.js';
+
+// --- M6: the funnel and timing jobs (brief §8.1) ----------------------------
+export {
+  loadStepDefinitions,
+  loadStepStates,
+  loadLifecycle,
+  loadSegmentFacts,
+  loadSkippedOrErroredAfter,
+  loadCohortFacts,
+  loadFrozenThresholds,
+  loadTrend,
+  refreshLifecycle,
+  SIGNED_UP,
+  ACTIVATED,
+  PAID,
+  SKIP_OR_ERROR_EVENTS,
+  SKIMMED_WINDOW_SECONDS,
+} from './funnel/facts.js';
+export type { LifecycleFact } from './funnel/facts.js';
+export {
+  funnelFactsFor,
+  currentFunnelReport,
+  storeThresholds,
+  aggregateHours,
+  aggregateDays,
+  aggregateSegments,
+  aggregateCohorts,
+  writeDailySummary,
+  runFunnelHourly,
+  runFunnelDaily,
+} from './funnel/aggregate.js';
 export type { EnqueueFollowUps, HandleBatchOptions } from './handler.js';
 export { IngestError } from './errors.js';
 export type { IngestRequest, IngestResponse, PreparedMessage } from './types.js';
