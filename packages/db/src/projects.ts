@@ -85,6 +85,16 @@ export interface CreateProjectOptions {
   /** The founder who owns it. Absent for an email-only instant project until claimed. */
   ownerUserId?: string;
   claimExpiresAt?: Date;
+  /**
+   * Whether the owner has PROVED they own that email.
+   *
+   * Defaults to true when there is an owner, which is right for a founder who is
+   * already signed in. The free audit passes false: the project is theirs to use
+   * immediately, but "claimed" means they clicked the magic link — and an unclaimed
+   * project is what M11's sweep stops at 14 days and deletes at 30, so an abandoned
+   * audit cleans itself up instead of living forever.
+   */
+  claimed?: boolean;
 }
 
 /**
@@ -104,7 +114,7 @@ export async function createProject(options: CreateProjectOptions): Promise<Crea
       liveProjectId: null,
       settings,
       claimExpiresAt: options.claimExpiresAt ?? null,
-      claimedAt: options.ownerUserId ? new Date() : null,
+      claimedAt: options.ownerUserId && options.claimed !== false ? new Date() : null,
     });
 
     const test = await insertProject(db, {

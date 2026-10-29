@@ -1587,3 +1587,96 @@ inside it ends the literal and produces a cascade of "',' expected" errors point
 prose. It has now happened in M6, twice in M8, and again in M11's dictionary upsert.
 Rule for future comments inside SQL strings: no backticks, ever — name columns in
 plain words.
+
+### 2026-10-29 · Segment signs the first event of a batch, not the batch
+
+Verified against the live docs on 2026-10-29: the shared secret produces a hex
+HMAC-SHA1 in `X-Signature` over the request body — AND, with batching enabled, over
+the FIRST EVENT of the batch rather than the whole thing.
+
+A verifier that only hashes the body therefore rejects every batched delivery, which
+to a founder looks exactly like a wrong secret. Both shapes are accepted, whole body
+first because the unbatched case is commoner and should not pay for a JSON parse.
+
+The one part that cannot be made exact from our side: Segment hashes the bytes it
+serialised, and `JSON.stringify` of a parsed object need not reproduce them. It works
+for Segment's own output and is the documented approach, but if a founder's batched
+deliveries ever fail verification, that is the line to suspect.
+
+RudderStack and PostHog do not sign at all — they forward to a URL with static headers
+you choose — so for those the shared secret IS a header value, compared in constant
+time. Weaker, and the reason the secret is stored encrypted like any other credential.
+
+### 2026-10-29 · A no-code feed cannot re-authenticate, and should not
+
+The adapter was going to post through `/v1/batch` with the project's secret key. It
+cannot: a secret key's token is never stored, only its hash — the
+`api_keys_secret_is_hashed` constraint enforces it — so there is nothing to read back.
+
+That is the right design and worth keeping: a leak of the sources table cannot be
+replayed as a valid API key. So `handleBatch` gained a `resolvedKey` option instead.
+The verified webhook signature is the authentication, and the key's ID is what rate
+limiting and the audit log attach to. It skips token auth and nothing else: validation,
+dedupe, identity, sessions and the dictionary all still run, which is the whole reason
+the adapters go through that function rather than around it.
+
+### 2026-10-29 · The adapter stamps its own source, or the warning cannot fire
+
+Events were being recorded with the source derived from the key kind, so a Segment
+feed and a founder's own server SDK both stored `server`. The double-path check looks
+for one action arriving from two sources in the same second, so it could never fire —
+the two paths were indistinguishable in the data.
+
+`IngestRequest` already had a `source` field; the adapter now sets it. Knowing where
+an event came from is most of the point of wiring a feed.
+
+Found while building the test for it, along with a related fact: dedupe by `messageId`
+works ACROSS source paths, so reusing ids made the test fail because the second copy
+was correctly ignored. Right for a retry; wrong as a model of two independent
+integrations, which each generate their own ids.
+
+### 2026-10-29 · The PostHog allow-list is deny-by-default
+
+PostHog's autocapture sends an event per click and input. A drop-list would silently
+start accepting whatever new `$`-prefixed event PostHog ships next, so nothing is
+accepted unless it is named: `$pageview`, `$pageleave`, `$identify`, `$set`,
+`$groupidentify`, plus any event whose name does not begin with `$` (a founder's own).
+
+Its single `distinct_id` is read as anonymous when it looks like a UUID and as a user
+id otherwise. Treating a UUID as anonymous is the safe mistake — an anonymous visitor
+who later identifies is linked by the pipeline anyway, whereas reading many anonymous
+ids as user ids would invent people.
+
+### 2026-10-29 · The generated curl was missing `messageId`
+
+`messageId` is required, and the first version of the plain-HTTP snippet left it out,
+so a founder pasting it would have got `invalid_message` three times and no events.
+The exit check "generated samples run against local ingest" caught it because the
+sample is actually executed rather than eyeballed — which is the only reason to write
+the check that way.
+
+It is also the dedupe key, so the snippet now says to generate a fresh one per event
+and explains that sending the same id twice is what makes a retry safe.
+
+### 2026-10-29 · The free audit creates an unclaimed project
+
+`createProject` marks a project claimed whenever it has an owner, which is right for a
+founder who is already signed in and wrong for the email-only flow: brief §9 wants
+unclaimed projects stopped at 14 days and deleted at 30, and a project claimed at
+creation would never be swept. `claimed: false` is now explicit, so an abandoned audit
+cleans itself up.
+
+The project is usable immediately regardless. "Claimed" means they proved the email by
+clicking the magic link, and the goal is a real number in under ten minutes — which
+rules out making them go to their inbox before they can paste the snippet.
+
+### 2026-10-29 · The signup guard keeps a hash and a domain, nothing else
+
+The per-IP limit only ever COUNTS, so the IP is stored as a sha256 and never in the
+clear — it is personal data in the EU and the plain value buys nothing. Only the email
+DOMAIN is kept, not the address: enough to see a hundred attempts from one place, and
+not a list of everyone who tried the product and changed their mind. Those people did
+not become customers and we should not be holding their addresses.
+
+No IP is not a refusal. Behind some proxies there is nothing to read, and refusing
+everyone in that situation would make the product unusable for them.

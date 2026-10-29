@@ -45,6 +45,8 @@ export async function adminClient(): Promise<pg.Client> {
  * error message useful when a new table lands with a constraint nobody expected.
  */
 const TABLES = [
+  'signup_attempts',
+  'sources',
   'alert_deliveries',
   'alerts',
   'integration_installs',

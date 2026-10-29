@@ -6,7 +6,7 @@ import {
   type MessageResult,
 } from '@dripmetric/catalog';
 import { currentProject, entitlements, limitOf, withProject, withoutProject } from '@dripmetric/db';
-import { extractKey, originAllowed, resolveKey } from './auth.js';
+import { extractKey, originAllowed, resolveKey, type ResolvedKey } from './auth.js';
 import { IngestError, badRequest, tooLarge, unauthorised, rateLimited } from './errors.js';
 import { consumeTokens } from './rate-limit.js';
 import { prepareMessage } from './validate.js';
@@ -32,6 +32,20 @@ export type EnqueueFollowUps = (projectId: number, followUps: FollowUp[]) => Pro
 
 export interface HandleBatchOptions {
   enqueue?: EnqueueFollowUps;
+  /*
+   * An already-authenticated caller (M12's source adapters).
+   *
+   * A no-code feed proves itself with a signed webhook, not with one of our API keys
+   * — and it could not use one even if we wanted it to: a secret key's token is
+   * never stored, only its hash (see the `api_keys_secret_is_hashed` constraint), so
+   * there is nothing to read back and replay.
+   *
+   * Passing the resolved key skips token auth and NOTHING else. Rate limiting,
+   * validation, dedupe, identity, sessions and the dictionary all still run, so a
+   * Segment feed is throttled and audited exactly like an SDK one. That is the whole
+   * point of the adapters going through this function instead of around it.
+   */
+  resolvedKey?: ResolvedKey;
 }
 
 export async function handleBatch(
@@ -83,13 +97,17 @@ async function run(request: IngestRequest, options: HandleBatchOptions): Promise
   // Authentication comes before the empty-batch shortcut below, so an unauthenticated
   // request gets 401 whatever it carries and the endpoint never confirms to someone
   // holding no key that their request was well formed.
-  const token = extractKey(request, body.writeKey);
-  if (!token)
-    throw unauthorised(
-      'No API key. Send it as a bearer token, as the Basic-auth username, or as `writeKey` in the body.',
-    );
-
-  const key = await resolveKey(token);
+  let key: ResolvedKey;
+  if (options.resolvedKey) {
+    key = options.resolvedKey;
+  } else {
+    const token = extractKey(request, body.writeKey);
+    if (!token)
+      throw unauthorised(
+        'No API key. Send it as a bearer token, as the Basic-auth username, or as `writeKey` in the body.',
+      );
+    key = await resolveKey(token);
+  }
 
   const decision = await withoutProject('resolve-api-key', (db) =>
     consumeTokens(

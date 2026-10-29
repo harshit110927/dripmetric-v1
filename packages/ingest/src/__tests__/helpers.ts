@@ -40,6 +40,8 @@ export async function resetData(): Promise<void> {
        * points nowhere near `funnel_steps`.
        */
       'changes',
+      'signup_attempts',
+      'sources',
       'alert_deliveries',
       'alerts',
       'integration_installs',

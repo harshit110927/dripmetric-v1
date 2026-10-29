@@ -359,3 +359,18 @@ export type {
   PropertyShapeFact,
   SourceShareFact,
 } from './health/checks.js';
+
+// --- M12: the AI-coder prompt generator (brief §9) ---------------------------
+export {
+  generateSnippet,
+  librariesFor,
+  SNIPPET_STACKS,
+  SNIPPET_LIBRARIES,
+} from './snippets/generate.js';
+export type {
+  GeneratedSnippet,
+  SnippetInput,
+  SnippetLibrary,
+  SnippetStack,
+  SnippetStep,
+} from './snippets/generate.js';

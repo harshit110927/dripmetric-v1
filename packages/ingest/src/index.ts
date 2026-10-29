@@ -146,3 +146,14 @@ export {
 export type { RetentionResult, UnclaimedResult } from './retention.js';
 export { checkTrackingHealth, runTrackingHealth, trackingProblems } from './health/run.js';
 export type { HealthResult } from './health/run.js';
+
+export { handleSourceWebhook } from './adapters/webhook.js';
+export type { WebhookRequest } from './adapters/webhook.js';
+export { normalisePostHog, normaliseSegmentLike, POSTHOG_ALLOWED } from './adapters/normalise.js';
+export type { AdapterSource, NormaliseResult } from './adapters/normalise.js';
+export {
+  verifySegmentSignature,
+  verifyStaticSecret,
+  verifyBodyHmac,
+} from './adapters/signatures.js';
+export type { SignatureAlgorithm, SignatureCheck } from './adapters/signatures.js';

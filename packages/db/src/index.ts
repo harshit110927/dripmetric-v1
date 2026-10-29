@@ -44,3 +44,7 @@ export * from './alerts.js';
 // They touch the filesystem and the schema, so the request path must not be able to
 // reach them, and keeping them out of here means the web bundle cannot pull them in.
 export * from './health-reads.js';
+export * from './sources.js';
+export * from './signup-guards.js';
+export * from './audit-signup.js';
+export * from './audit-flow.js';

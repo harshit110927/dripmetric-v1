@@ -307,18 +307,51 @@ back to switched-off metrics, the audit-log view shows full timestamps (the oppo
 job to a masked alert's coarse ones), and the privacy and terms pages say plainly that
 they are placeholders rather than pretending to be reviewed legal text.
 
-## M12 · Source adapters, free audit and AI-coder prompt — `[ ]`
+## M12 · Source adapters, free audit and AI-coder prompt — `[x]`
 
 **Build:** the Segment, RudderStack and PostHog adapters (signature checks, the PostHog
 allow-list, one source path per event), the email-only instant project flow with claim and
 expiry, first-event detection, the AI-coder prompt generator.
 
-- [ ] recorded Segment/RudderStack/PostHog payloads produce the same canonical events as native SDK sends
-- [ ] a bad signature gets 401
-- [ ] PostHog events outside the allow-list are dropped and counted
-- [ ] the double-path warning appears
-- [ ] the free-audit flow works end to end locally (email, keys, first event, dashboard)
-- [ ] generated samples for Node, Python (via Segment's library) and plain HTTP run against local ingest
+- [x] recorded Segment/RudderStack/PostHog payloads produce the same canonical events
+      as native SDK sends — the SAME simulated journeys (25 users, seed 7) loaded once
+      through the SDK and once through each adapter, then the stored canonical names
+      compared. Not two hand-written fixtures that happen to agree.
+- [x] a bad signature gets 401 — and a good one is accepted in both of Segment's
+      shapes. Its docs note that with batching enabled it signs **the first event of
+      the batch**, not the whole batch; a verifier that only hashes the body rejects
+      every batched delivery and looks exactly like a wrong secret. Both are tried.
+      An unknown source id and a non-uuid source id both answer 401, so a probe
+      cannot tell which ids exist.
+- [x] PostHog events outside the allow-list are dropped and counted — 25 autocapture
+      events dropped, counted on the source row by reason, and the allow-list is
+      deny-by-default so a new `$event` PostHog invents tomorrow is dropped too.
+- [x] the double-path warning appears — proven with both real paths: the SDK and a
+      Segment feed sending the same actions. Two findings came out of building it,
+      below.
+- [x] the free-audit flow works end to end locally — email in, both keys out, "nothing
+      yet", one event through the real API with the real key, the screen flips and can
+      name what it sees, and a real number in the dashboard. A throwaway address is
+      refused before anything is created, and the same person starting twice reuses
+      their founder row.
+- [x] generated samples for Node, Python (via Segment's library) and plain HTTP run
+      against local ingest — the plain-HTTP sample is **executed**: its JSON body is
+      lifted out of the generated curl and posted through the real handler. The
+      library samples are checked for the canonical names, our host and the absence of
+      a secret literal, since running them would need three language runtimes.
+
+**Three real bugs the exit checks caught.** The generated curl omitted `messageId`,
+which is required — a founder pasting it would have got `invalid_message` three times
+and no events, the worst possible first impression. The adapter recorded its events as
+generic `server` sends, so a Segment feed and a founder's own SDK were
+indistinguishable and the double-path warning could never fire. And `createProject`
+marks a project claimed whenever it has an owner, which is right for a signed-in
+founder and wrong for the audit — an abandoned audit would never have been swept.
+
+**One thing worth knowing rather than fixing:** dedupe by `messageId` works across
+source paths, so the same event id sent twice is correctly ignored however it arrives.
+That is right for a retry, and it means the double-path problem is only visible to the
+same-person-same-second-two-sources check — which is why that check exists.
 
 ## M13 · Hardening, shadow copy and load test — `[ ]`
 
