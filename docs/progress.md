@@ -194,16 +194,30 @@ Also measured on that run: 13.8% of first-ever pricing views are quick exits (28
 203), split by source, device, country and trial day; and every per-person leak
 reports its potential revenue with the formula beside it.
 
-## M9 · Dashboard, masking and entitlements — `[ ]`
+## M9 · Dashboard, masking and entitlements — `[x]`
 
 **Build:** the eight modules from real data, the settings page, masked and full
 serializers, the reveal allowance, plain-language copy, empty/loading/error states.
 
-- [ ] all modules render from simulator data
-- [ ] the formula is visible beside potential revenue
-- [ ] an automated scan: a free project's API and HTML contain no seeded email, name or user id; a paid project shows them
-- [ ] the reveal allowance works (default 0)
-- [ ] screenshots of every module saved in `docs/screens/`
+- [x] all modules render from simulator data — `pnpm screens` fails if a module's
+      heading is missing, and it runs in CI
+- [x] the formula is visible beside potential revenue — in the leak table, the intent
+      module and every per-leak figure; see `docs/screens/02-leaks.png`
+- [x] an automated scan: a free project's API and HTML contain no seeded email, name
+      or user id; a paid project shows them. **Both halves**: the data-access layer's
+      serialized output (`packages/db/src/__tests__/masking.test.ts`, which scans the
+      JSON for the seeded strings rather than checking that particular fields look
+      right) and the rendered HTML (`pnpm screens`), because a gate that holds in a
+      serializer and leaks in a template has still leaked.
+- [x] the reveal allowance works (default 0) — refuses with a reason at 0, reveals
+      exactly the person it was spent on, costs nothing to repeat, runs out, and
+      writes every reveal to the audit log
+- [x] screenshots of every module saved in `docs/screens/` — 13 of them, with
+      `docs/screens/README.md` recording the scan's result
+
+The masked rows carry a tag, an email hint, a fixed-width bar and a coarse time, and
+nothing else: there is no identifier on a masked page at all, which is why the reveal
+button posts the tag and the server resolves it.
 
 ## M10 · Alerts and reports — `[ ]`
 

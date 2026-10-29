@@ -34,6 +34,10 @@ export * from './facts.js';
 export * from './coverage.js';
 export * from './changes.js';
 export * from './funnel-reads.js';
+export * from './serialize.js';
+export * from './reveals.js';
+export * from './people.js';
+export * from './dashboard-reads.js';
 
 // Migrations, the schema reset and the `.env` loader live in @dripmetric/db/admin.
 // They touch the filesystem and the schema, so the request path must not be able to

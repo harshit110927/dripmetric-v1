@@ -23,6 +23,7 @@
     "test:watch": "vitest",
     "test:e2e": "pnpm --filter dripmetric test:e2e",
     "check:names": "node scripts/check-script-names.mjs",
+    "screens": "node scripts/screens.mjs",
     "check:fixtures": "node scripts/check-fixtures.mjs",
     "check:licenses": "node scripts/check-licenses.mjs",
     "sdk:build": "pnpm --filter dripmetric build",
@@ -31,10 +32,14 @@
     "ready": "pnpm format && pnpm verify"
   },
   "devDependencies": {
+    "@dripmetric/db": "workspace:*",
+    "@dripmetric/ingest": "workspace:*",
+    "@dripmetric/sim": "workspace:*",
     "@eslint/js": "10.0.1",
     "@types/node": "24.10.1",
     "eslint": "10.13.0",
     "globals": "^17.13.0",
+    "playwright": "1.63.0",
     "prettier": "3.9.10",
     "tsx": "4.23.15",
     "typescript": "6.0.3",

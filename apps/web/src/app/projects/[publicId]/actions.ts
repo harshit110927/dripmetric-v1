@@ -5,7 +5,11 @@ import {
   confirmFact,
   confirmMapping,
   ignoreName,
+  markChange,
+  resolveTag,
+  revealPersonByKey,
   unconfirmFact,
+  unfreezeThresholds,
   updateSettings,
   PRODUCT_FACTS,
   type ProductFact,
@@ -14,6 +18,7 @@ import { CANONICAL_MEANINGS } from '@dripmetric/catalog';
 import { queueRecompute, runSuggestions } from '@dripmetric/ingest';
 import { withOwnedProject } from '@/lib/project-access';
 import { anthropicAsk } from '@/lib/anthropic';
+import { invalidateDashboard } from '@/lib/dashboard';
 
 /**
  * The setup and Inbox actions (brief §7).
@@ -113,6 +118,101 @@ export async function ignoreNameAction(formData: FormData): Promise<void> {
     await queueRecompute(db, 'mapping');
   });
   paths(publicId);
+}
+
+/**
+ * Spends a reveal on one person (brief §2, §9).
+ *
+ * The form posts the masked TAG, not an id: the row it came from deliberately carries
+ * no identifier, which is the whole point of the masked shape. `resolveTag` finds the
+ * person behind it.
+ */
+export async function revealAction(formData: FormData): Promise<void> {
+  const publicId = String(formData.get('publicId') ?? '');
+  const tag = String(formData.get('tag') ?? '');
+  if (tag.length === 0) return;
+
+  await withOwnedProject(publicId, async (db, project, user) => {
+    const userKey = await resolveTag(db, tag);
+    if (userKey === null) return;
+    await revealPersonByKey(db, userKey, user.id, new Date());
+    invalidateDashboard(project.id);
+  });
+  revalidatePath(`/projects/${publicId}/dashboard`);
+}
+
+/**
+ * Marks a change (brief §8.1, §9's Changes module).
+ *
+ * Freezing the thresholds is the point: without it a before-and-after is measured
+ * against a bar that moved while the founder was waiting.
+ */
+export async function markChangeAction(formData: FormData): Promise<void> {
+  const publicId = String(formData.get('publicId') ?? '');
+  const note = String(formData.get('note') ?? '').trim();
+  const happened = String(formData.get('happenedAt') ?? '').trim();
+  if (note.length === 0) return;
+
+  const happenedAt = happened.length > 0 ? new Date(happened) : new Date();
+  if (Number.isNaN(happenedAt.getTime())) return;
+
+  await withOwnedProject(publicId, async (db, project, user) => {
+    await markChange(db, { stepId: null, happenedAt, note }, user.id);
+    invalidateDashboard(project.id);
+  });
+  revalidatePath(`/projects/${publicId}/settings`);
+  revalidatePath(`/projects/${publicId}/dashboard`);
+}
+
+/** Unfreezes the thresholds, so they track the product again. */
+export async function unfreezeAction(formData: FormData): Promise<void> {
+  const publicId = String(formData.get('publicId') ?? '');
+  await withOwnedProject(publicId, async (db, project, user) => {
+    await unfreezeThresholds(db, user.id);
+    invalidateDashboard(project.id);
+  });
+  revalidatePath(`/projects/${publicId}/settings`);
+}
+
+/** The settings a founder can change from the settings page (brief §9). */
+export async function saveSettingsAction(formData: FormData): Promise<void> {
+  const publicId = String(formData.get('publicId') ?? '');
+  const text = (name: string) => String(formData.get(name) ?? '').trim();
+  const list = (name: string) =>
+    text(name)
+      .split(/[\s,]+/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+
+  const windowDays = Number.parseInt(text('didntPayWindowDays'), 10);
+  const allowance = Number.parseInt(text('revealAllowance'), 10);
+
+  await withOwnedProject(publicId, async (db, project, user) => {
+    await updateSettings(db, user.id, {
+      productDescription: text('productDescription').slice(0, 500),
+      internalDomains: list('internalDomains'),
+      internalEmails: list('internalEmails'),
+      brandTerms: list('brandTerms'),
+      allowedOrigins: list('allowedOrigins'),
+      consentRequired: formData.get('consentRequired') === 'on',
+      mobileFirst: formData.get('mobileFirst') === 'on',
+      productKind: productKindOf(text('productKind')),
+      alertChannel: alertChannelOf(text('alertChannel')),
+      ...(Number.isInteger(windowDays) && windowDays > 0 ? { didntPayWindowDays: windowDays } : {}),
+      ...(Number.isInteger(allowance) && allowance >= 0 ? { revealAllowance: allowance } : {}),
+    });
+    invalidateDashboard(project.id);
+  });
+  revalidatePath(`/projects/${publicId}/settings`);
+  revalidatePath(`/projects/${publicId}/dashboard`);
+}
+
+function productKindOf(value: string): 'self-serve' | 'team' | 'developer' {
+  return value === 'team' || value === 'developer' ? value : 'self-serve';
+}
+
+function alertChannelOf(value: string): 'slack' | 'discord' | 'email-digest' | 'none' {
+  return value === 'slack' || value === 'discord' || value === 'email-digest' ? value : 'none';
 }
 
 /** Asks the model for suggestions. Does nothing if no key is configured. */

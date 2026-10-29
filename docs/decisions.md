@@ -1156,3 +1156,74 @@ What resolves what is explicit rather than general: paying answers the four unpa
 leaks, coming back answers the stall and the two quiet leaks, and a deletion or an
 opt-out resolves everything about that person. A blanket "any later activity resolves
 any leak" would have quietly closed a cancellation because the person logged in again.
+
+### 2026-10-29 · The masked row carries no identifier at all, so the tag is the handle
+
+The obvious way to build a reveal button is to put the person's key in a hidden field.
+That would have put a stable per-person identifier on a page whose entire promise is
+that it has none — and the exit-check scan would then have had to be taught to ignore
+it, which is how a gate stops being a gate.
+
+So the masked shape has no key, the reveal form posts the TAG, and the server finds
+the person by recomputing each tag until one matches. That is O(people) per reveal
+rather than O(1), bounded by the free plan's tracked-user limit, and it is the right
+trade: the scan can stay a blunt search for any identifier, which is what makes it
+worth anything.
+
+### 2026-10-29 · The scan looks for the strings, not at the fields
+
+`packages/db/src/__tests__/masking.test.ts` seeds a person with distinctive values and
+then searches the serialized JSON for them, rather than asserting that `email` is null
+and `name` is a bar.
+
+The difference matters when someone adds a field. A test that checks the known fields
+passes forever; a test that searches the output fails the moment a new field carries
+something it should not. The same reasoning put the second scan in `pnpm screens`
+against rendered HTML: a gate that holds in the serializer and leaks in a template has
+still leaked, and only a browser can see the template.
+
+### 2026-10-29 · Twelve dashboard reads, one after another
+
+The dashboard loader ran its twelve reads in a `Promise.all`. A `ScopedDb` is a single
+client inside a single transaction, and pg deprecates a query issued while another is
+running on that client: it queues them today and throws in pg 9. The "parallel"
+version was sequential with a warning attached.
+
+Real parallelism would need a connection each, and a transaction cannot span two
+connections — so the reads are now plainly sequential, and `serializeContext` with
+them. The warning was how this was noticed, in a test that was otherwise passing.
+
+### 2026-10-29 · A name bar is a fixed width
+
+The masked shape shows a bar where the name is. It is seven blocks whatever the name,
+because a bar that matched the real length would answer "is this my one customer
+called Jo?" straight from the screen.
+
+### 2026-10-29 · The dashboard cache is keyed on the project, not the URL
+
+Brief §9 asks for dashboard reads to be cached for 60 seconds. The cache holds the
+promise rather than the result, so two simultaneous requests do the work once, and a
+failed load is evicted rather than cached.
+
+It is keyed on the project id and lives in process, deliberately rather than using the
+framework's own caching: these reads depend on the project's PLAN, and a cache keyed
+on the URL would serve a paid project's names to a free one after a downgrade.
+
+### 2026-10-29 · Another clock inside SQL
+
+`eventSourceShare` filtered on `received_at > now() - 7 days`. Same bug as the funnel
+trend in M6, in a file the lint rule did not cover. The rule now covers the intent and
+leak jobs and the dashboard reads as well — and widening it flagged nothing else,
+which is the answer that makes widening it worth doing.
+
+### 2026-10-29 · The intent list says "0 now, 100 at their peak", and why
+
+The first screenshots showed "0 high · 0 warm · 207 low" above a list of people at
+peak 100, which reads as broken. It is not: the simulated run ends months in the past,
+scores halve every quiet week, and the list is everyone who EVER reached 60 while the
+counts are where people stand today.
+
+Both numbers are right and the pair is confusing, so the module now says so in one
+line rather than leaving a founder to work it out. The list also gained the band
+column brief §9 asks for — "a masked list with tag, band, leak and a coarse time" —
+which had simply been missed until the screenshot made it visible.

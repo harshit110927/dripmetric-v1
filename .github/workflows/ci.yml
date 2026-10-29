@@ -103,3 +103,22 @@ jobs:
       # blocked" can only be proven in a real browser.
       - name: Browser SDK tests
         run: pnpm test:e2e
+
+      # M9's exit checks that only a browser can answer: every dashboard module
+      # renders from simulator data, and a scan of the RENDERED HTML finds none of a
+      # seeded person's email, name or user id on a free project while a paid one
+      # shows all three. The script exits non-zero on any finding.
+      #
+      # The data-access layer has its own scan in packages/db's tests; this is the
+      # other half, because a gate that holds in a serializer and leaks in a template
+      # has still leaked.
+      - name: Dashboard screenshots and masking scan
+        run: pnpm screens
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-screens
+          path: docs/screens/
+          if-no-files-found: error

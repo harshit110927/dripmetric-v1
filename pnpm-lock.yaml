@@ -8,6 +8,15 @@ importers:
 
   .:
     devDependencies:
+      '@dripmetric/db':
+        specifier: workspace:*
+        version: link:packages/db
+      '@dripmetric/ingest':
+        specifier: workspace:*
+        version: link:packages/ingest
+      '@dripmetric/sim':
+        specifier: workspace:*
+        version: link:packages/sim
       '@eslint/js':
         specifier: 10.0.1
         version: 10.0.1(eslint@10.13.0)
@@ -20,6 +29,9 @@ importers:
       globals:
         specifier: ^17.13.0
         version: 17.13.0
+      playwright:
+        specifier: 1.63.0
+        version: 1.63.0
       prettier:
         specifier: 3.9.10
         version: 3.9.10

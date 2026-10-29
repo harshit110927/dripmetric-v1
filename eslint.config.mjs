@@ -77,7 +77,13 @@ export default tseslint.config(
      * data (which happens months in the past) and it would have answered a question
      * about last August with the last eight weeks of this month.
      */
-    files: ['packages/ingest/src/funnel/**/*.ts', 'packages/db/src/funnel-reads.ts'],
+    files: [
+      'packages/ingest/src/funnel/**/*.ts',
+      'packages/ingest/src/intent/**/*.ts',
+      'packages/ingest/src/leaks/**/*.ts',
+      'packages/db/src/funnel-reads.ts',
+      'packages/db/src/dashboard-reads.ts',
+    ],
     rules: {
       'no-restricted-syntax': [
         'error',

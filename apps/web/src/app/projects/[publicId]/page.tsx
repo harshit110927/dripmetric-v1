@@ -45,8 +45,10 @@ export default async function ProjectPage({ params }: { params: Promise<{ public
       </p>
 
       <p>
+        <Link href={`/projects/${publicId}/dashboard`}>Dashboard</Link> ·{' '}
         <Link href={`/projects/${publicId}/setup`}>Set up your product</Link> ·{' '}
-        <Link href={`/projects/${publicId}/inbox`}>Inbox</Link>
+        <Link href={`/projects/${publicId}/inbox`}>Inbox</Link> ·{' '}
+        <Link href={`/projects/${publicId}/settings`}>Settings</Link>
       </p>
 
       <h2>Your keys</h2>
