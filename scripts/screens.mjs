@@ -178,6 +178,29 @@ function startServer() {
   return child;
 }
 
+/**
+ * Waits for the page's streamed content to be in the live DOM.
+ *
+ * Next streams server components: the shell arrives first with the Suspense
+ * fallback, the real content follows inside a `<template>`, and React swaps it in
+ * with its own `$RC` reveal script — which waits for an animation frame and can be
+ * up to ~2.3 seconds behind. `networkidle` fires well before that.
+ *
+ * This was a race the scan had always been running and had simply been winning.
+ * `page.content()` includes templates, so the HTML scan for leaked identity was
+ * never affected; `locator('section')` only sees the live DOM, so the MODULE checks
+ * were. When M11 added a read to the dashboard the page got slower and five of the
+ * eight modules started being reported missing — modules that render perfectly well.
+ *
+ * Waiting for the LAST module is the whole fix: if it is visible, everything above
+ * it has been revealed too.
+ */
+async function settled(page) {
+  await page
+    .getByRole('heading', { name: 'Did your changes work' })
+    .waitFor({ state: 'visible', timeout: 30_000 });
+}
+
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
@@ -256,6 +279,7 @@ async function main() {
     // --- the free project: every module, and the scan ------------------------
     const freeUrl = `${BASE}/projects/${free.publicId}/dashboard`;
     await page.goto(freeUrl, { waitUntil: 'networkidle' });
+    await settled(page);
     const freeHtml = await page.content();
 
     for (const secret of SECRETS) {
@@ -282,6 +306,7 @@ async function main() {
       const section = page.locator('section', {
         has: page.getByRole('heading', { name: heading }),
       });
+      // Already settled above, so a missing section here is a real absence.
       if ((await section.count()) === 0) {
         findings.push(`MODULE MISSING: ${heading}`);
         continue;
@@ -303,6 +328,15 @@ async function main() {
     // --- the paid project: the same person, with their name ------------------
     const paidUrl = `${BASE}/projects/${paid.publicId}/dashboard`;
     await page.goto(paidUrl, { waitUntil: 'networkidle' });
+    /*
+     * Needed for the SCREENSHOT, not for the scan.
+     *
+     * The identity check below reads `page.content()`, which includes the streamed
+     * `<template>`, so it was never affected by the reveal race. The full-page
+     * screenshot is: without this it captures the Suspense fallback, and the picture
+     * in `docs/screens/` would show a loading state rather than a paid dashboard.
+     */
+    await settled(page);
     const paidHtml = await page.content();
 
     for (const secret of [SEEDED.email, SEEDED.name, SEEDED.externalId]) {

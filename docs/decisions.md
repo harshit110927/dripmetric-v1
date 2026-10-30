@@ -1787,3 +1787,39 @@ The snippet page now reads `label`, `position` and `event_name` from `funnel_ste
 directly, and skips steps with no canonical event: a step matched by a URL rule has
 nothing a server snippet can call, and printing an empty `track('')` would be worse
 than printing nothing.
+
+### 2026-10-30 · The CSP broke the dashboard, and the screenshot check caught it
+
+M13's security headers set `script-src 'self'` with no nonce. Next streams server
+components and bootstraps them with INLINE scripts (`self.__next_f.push(...)`), so the
+browser blocked them: hydration never ran, the streamed content never reached the DOM,
+and five of the eight dashboard modules were invisible. The shell rendered and nothing
+was interactive — for every user, not only in a test.
+
+`pnpm screens` found it, which is the whole reason that check exists: the modules were
+present in the RSC flight payload and absent from the live DOM, and nothing else in
+the suite looks at a real browser. The first diagnosis was wrong — it looked like a
+Suspense reveal race in the scan, and the scan did also need a wait — but the missing
+reveal was a blocked script, not a slow one.
+
+The fix is a per-request nonce, not `'unsafe-inline'`, which would have removed the
+policy's only teeth. Next reads the nonce from the `content-security-policy` REQUEST
+header and stamps it on its own script tags, which is why the header is set on both
+the request and the response. `'strict-dynamic'` lets those nonced scripts load their
+own chunks without listing every chunk URL.
+
+Two tests now pin it: the script policy must contain a nonce and must NOT contain
+`'unsafe-inline'`, and two requests must get different nonces — a reused nonce is
+barely better than no policy, since anything that can read one page can inject a
+script that passes on the next.
+
+### 2026-10-30 · The screenshot scan was racing React's reveal
+
+Separately, and really: the scan counted `section` elements after `networkidle`, but
+Next's streamed content arrives inside a `<template>` and React swaps it in with its
+own reveal script, up to ~2.3 seconds later. `page.content()` includes templates, so
+the masking scan was never affected; `locator('section')` only sees the live DOM, so
+the module checks were.
+
+It had always been a race and had simply been winning it. Waiting for the LAST
+module's heading is the fix: if that is visible, everything above it has been revealed.

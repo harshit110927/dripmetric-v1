@@ -85,14 +85,42 @@ describe('security headers', () => {
     const csp = headers.get('content-security-policy') ?? '';
 
     expect(csp).toContain("default-src 'self'");
-    // Scripts get no inline allowance: Next's bundles come from this origin.
-    expect(csp).toContain("script-src 'self'");
-    expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
-    // Styles do, because the screens use inline style attributes, which is what
-    // React renders.
-    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(headers.get('x-frame-options')).toBe('DENY');
+    // Styles keep the inline allowance: the screens use inline style attributes,
+    // which is what React renders.
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+  });
+
+  it('carries a per-request nonce, because Next bootstraps with inline scripts', () => {
+    /*
+     * This is the regression test for a production-breaking bug.
+     *
+     * A plain `script-src 'self'` blocks Next's inline bootstrap
+     * (`self.__next_f.push(...)`), so hydration never runs and streamed server
+     * components never reach the DOM: the shell renders and five of the eight
+     * dashboard modules stay invisible. `pnpm screens` caught it; this catches it
+     * faster.
+     *
+     * `'unsafe-inline'` would "fix" it by removing the policy's only teeth, so the
+     * assertion is specifically that a nonce is present and `unsafe-inline` is not.
+     */
+    const csp = headersFor('/projects/abc/dashboard').get('content-security-policy') ?? '';
+    const scriptSrc = csp.split('; ').find((part) => part.startsWith('script-src')) ?? '';
+
+    expect(scriptSrc).toMatch(/'nonce-[A-Za-z0-9+/=-]{8,}'/);
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
+    // `strict-dynamic` lets the nonced bootstrap load its own chunks without every
+    // chunk URL being listed.
+    expect(scriptSrc).toContain("'strict-dynamic'");
+  });
+
+  it('gives every request a different nonce', () => {
+    // A reused nonce is barely better than `unsafe-inline`: anything that can read
+    // one page can then inject a script that passes on the next.
+    const first = headersFor('/login').get('content-security-policy') ?? '';
+    const second = headersFor('/login').get('content-security-policy') ?? '';
+    expect(first).not.toBe(second);
   });
 
   it('does not put a page CSP on the ingest API', () => {
