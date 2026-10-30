@@ -1762,3 +1762,28 @@ as HTML is how content-type confusion becomes XSS.
 So it accepts the literal string `true` and nothing else — not "yes", "1" or "TRUE",
 which are the kinds of thing someone sets in a hurry, and a gate that accepts them is a
 gate that was never really closed. There is a test for each.
+
+### 2026-10-30 · `pnpm typecheck` had never checked the web app
+
+M12's CI failed at Build on a real type error in the snippet page: two interfaces are
+named `StepDefinition`, one in `packages/engine` (position, importance, expected
+seconds) and one in `packages/ingest` (stepId, label, eventName, urlPattern). The page
+used the engine's and expected the other's `eventName`.
+
+The reason it reached CI is the finding worth keeping: `apps/web` was not in the root
+`tsconfig.json` references, so `tsc -b` had never compiled it. Only `next build`
+type-checks the app — and `next build` only began running in CI earlier that day, when
+the root `build` script was widened past `./packages/**`. So the dashboard, every
+`/v1` route handler and these pages had been type-checked by a step that did not exist
+until a few hours before.
+
+`apps/web` is now a project reference, and adding it immediately found two more errors
+in work written that same evening: a second `step.eventName` the first fix missed, and
+a test assigning to `process.env.NODE_ENV`, which is typed read-only (`vi.stubEnv`
+does the job). That is three errors from one line of configuration, which is a fair
+measure of what the gap was costing.
+
+The snippet page now reads `label`, `position` and `event_name` from `funnel_steps`
+directly, and skips steps with no canonical event: a step matched by a URL rule has
+nothing a server snippet can call, and printing an empty `track('')` would be worse
+than printing nothing.

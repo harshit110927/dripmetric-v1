@@ -1,11 +1,26 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/catalog" },
-    { "path": "./packages/db" },
-    { "path": "./packages/engine" },
-    { "path": "./packages/ingest" },
-    { "path": "./packages/sim" },
-    { "path": "./apps/worker" }
+    {
+      "path": "./packages/catalog"
+    },
+    {
+      "path": "./packages/db"
+    },
+    {
+      "path": "./packages/engine"
+    },
+    {
+      "path": "./packages/ingest"
+    },
+    {
+      "path": "./packages/sim"
+    },
+    {
+      "path": "./apps/worker"
+    },
+    {
+      "path": "./apps/web"
+    }
   ]
 }

@@ -11,10 +11,15 @@ import type * as WebEnvModule from '../env';
  * founder data, and the security headers.
  */
 
-const originalEnv = { ...process.env };
-
 afterEach(() => {
-  process.env = { ...originalEnv };
+  /*
+   * `vi.unstubAllEnvs` rather than reassigning `process.env`.
+   *
+   * `NODE_ENV` is typed read-only, so assigning to it does not typecheck — which
+   * only surfaced once `apps/web` was added to the root project references. Vitest's
+   * own stubbing does the same job and restores cleanly.
+   */
+  vi.unstubAllEnvs();
   vi.resetModules();
 });
 
@@ -33,13 +38,13 @@ describe('the gate on real founder data (settled decision 1)', () => {
      * nothing here can check that they do — which is why the runbook says so in
      * those words.
      */
-    process.env['NODE_ENV'] = 'production';
-    delete process.env['BACKUPS_CONFIRMED'];
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('BACKUPS_CONFIRMED', '');
     const { liveProjectsAllowed: gated, isProduction: prod } = await freshEnv();
     expect(prod()).toBe(true);
     expect(gated()).toBe(false);
 
-    process.env['BACKUPS_CONFIRMED'] = 'true';
+    vi.stubEnv('BACKUPS_CONFIRMED', 'true');
     const { liveProjectsAllowed: confirmed } = await freshEnv();
     expect(confirmed()).toBe(true);
   });
@@ -47,9 +52,9 @@ describe('the gate on real founder data (settled decision 1)', () => {
   it('accepts only exactly "true", not anything truthy', async () => {
     // "yes", "1" and "TRUE" are the kinds of thing someone sets in a hurry, and a
     // gate that accepts them is a gate that was never really closed.
-    process.env['NODE_ENV'] = 'production';
+    vi.stubEnv('NODE_ENV', 'production');
     for (const value of ['yes', '1', 'TRUE', 'True', 'on', '']) {
-      process.env['BACKUPS_CONFIRMED'] = value;
+      vi.stubEnv('BACKUPS_CONFIRMED', value);
       const { liveProjectsAllowed: gated } = await freshEnv();
       expect(gated(), value).toBe(false);
     }

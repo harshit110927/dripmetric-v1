@@ -6,7 +6,6 @@ import {
   type SnippetStack,
   type SnippetStep,
 } from '@dripmetric/engine';
-import { loadStepDefinitions } from '@dripmetric/ingest';
 import { PAID_EVENT } from '@dripmetric/engine';
 import { withOwnedProject } from '@/lib/project-access';
 import { webEnv } from '@/lib/env';
@@ -44,7 +43,29 @@ export default async function SnippetPage({
   const { steps, publishableKey, paidEvent } = await withOwnedProject(
     publicId,
     async (db, project) => {
-      const definitions = await loadStepDefinitions(db);
+      /*
+       * Read from `funnel_steps` directly, not through `loadStepDefinitions`.
+       *
+       * That returns the ENGINE's `StepDefinition` — position, importance, expected
+       * seconds — which is what the funnel maths needs and does not carry the
+       * canonical event name. The snippet needs exactly the opposite three fields:
+       * the founder's label, the position, and the event that completes the step.
+       *
+       * Two interfaces share the name `StepDefinition`, one in `packages/engine` and
+       * one in `packages/ingest`, and conflating them is how this page shipped a type
+       * error that only `next build` caught.
+       */
+      const definitions = await db.query<{
+        label: string;
+        position: number;
+        event_name: string | null;
+      }>(
+        `SELECT label, position, event_name
+           FROM funnel_steps
+          WHERE project_id = $1
+          ORDER BY position`,
+        [db.projectId],
+      );
       const key = await db.maybeOne<{ token: string }>(
         `SELECT token FROM api_keys
           WHERE project_id = $1 AND kind = 'publishable' AND mode = 'live'
@@ -59,11 +80,19 @@ export default async function SnippetPage({
       );
 
       return {
-        steps: definitions.map((step): SnippetStep => ({
-          label: step.label,
-          eventName: step.eventName,
-          position: step.position,
-        })),
+        /*
+         * Steps with no canonical event are left out.
+         *
+         * A step reached by a URL rule has nothing for a server snippet to call, and
+         * printing a `track('')` line would be worse than printing nothing.
+         */
+        steps: definitions
+          .filter((step): step is typeof step & { event_name: string } => step.event_name !== null)
+          .map((step): SnippetStep => ({
+            label: step.label,
+            eventName: step.event_name,
+            position: step.position,
+          })),
         publishableKey: key?.token ?? 'pk_live_your_key',
         paidEvent: paid?.canonical ?? null,
         projectName: project.name,
