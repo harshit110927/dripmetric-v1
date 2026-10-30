@@ -29,7 +29,11 @@
     "sdk:build": "pnpm --filter dripmetric build",
     "sdk:size": "pnpm --filter dripmetric size",
     "verify": "pnpm check:names && pnpm check:fixtures && pnpm lint && pnpm format:check && pnpm typecheck && pnpm check:licenses && pnpm test",
-    "ready": "pnpm format && pnpm verify"
+    "ready": "pnpm format && pnpm verify",
+    "shadow:up": "docker compose up -d postgres-shadow && node scripts/wait-for-db.mjs --shadow",
+    "shadow:migrate": "pnpm --filter @dripmetric/db migrate:shadow",
+    "shadow:reconcile": "pnpm --filter @dripmetric/worker reconcile",
+    "load": "node scripts/load-test.mjs"
   },
   "devDependencies": {
     "@dripmetric/db": "workspace:*",

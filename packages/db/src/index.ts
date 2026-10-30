@@ -48,3 +48,6 @@ export * from './sources.js';
 export * from './signup-guards.js';
 export * from './audit-signup.js';
 export * from './audit-flow.js';
+export * from './shadow.js';
+export { shadowConfigured, shadowDbPool, SHADOW_TIMEOUT_MS } from './pool.js';
+export * from './report-error.js';

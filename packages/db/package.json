@@ -20,7 +20,8 @@
     "build": "tsc -b",
     "clean": "rm -rf dist *.tsbuildinfo",
     "migrate": "tsx src/cli/migrate.ts",
-    "reset": "tsx src/cli/migrate.ts --reset"
+    "reset": "tsx src/cli/migrate.ts --reset",
+    "migrate:shadow": "tsx src/cli/migrate.ts --shadow"
   },
   "dependencies": {
     "@dripmetric/catalog": "workspace:*",

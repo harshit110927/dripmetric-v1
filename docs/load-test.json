@@ -1,0 +1,50 @@
+{
+  "ranAt": "2026-10-29T21:32:30.177Z",
+  "host": "http://localhost:3000",
+  "batchSize": 100,
+  "secondsPerLevel": 4,
+  "p95BudgetMs": 2000,
+  "ceiling": {
+    "eventsPerSecond": 391,
+    "concurrency": 2,
+    "p95Ms": 540,
+    "eventsPerDay": 33782400,
+    "limitedBy": "rate-limit",
+    "budgetCrossed": true
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "requests": 14,
+      "eventsPerSecond": 348,
+      "p50": 282,
+      "p95": 308,
+      "p99": 308,
+      "ok": 14,
+      "rateLimited": 0,
+      "failed": 0
+    },
+    {
+      "concurrency": 2,
+      "requests": 17,
+      "eventsPerSecond": 391,
+      "p50": 505,
+      "p95": 540,
+      "p99": 540,
+      "ok": 17,
+      "rateLimited": 0,
+      "failed": 0
+    },
+    {
+      "concurrency": 4,
+      "requests": 581,
+      "eventsPerSecond": 309,
+      "p50": 7,
+      "p95": 12,
+      "p99": 827,
+      "ok": 13,
+      "rateLimited": 568,
+      "failed": 0
+    }
+  ]
+}

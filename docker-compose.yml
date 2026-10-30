@@ -22,5 +22,38 @@ services:
       - '-c'
       - 'log_min_duration_statement=500'
 
+  # ---------------------------------------------------------------------------
+  # The shadow copy (settled decision 1, M13).
+  #
+  # "A parallel self-managed shadow copy: dual writes through the worker, shadow
+  # reads that log differences and latency, daily reconciliation, monthly drills."
+  #
+  # It exists because Supabase Free has no backups, and the gate on real founder
+  # data is "the shadow copy OR Supabase Pro backups". A second Postgres here makes
+  # the dual-write path something we can actually test — including the exit check
+  # that killing it does not slow ingest, which needs a database that can be killed.
+  # ---------------------------------------------------------------------------
+  postgres-shadow:
+    image: postgres:16-alpine
+    container_name: dripmetric-postgres-shadow
+    environment:
+      POSTGRES_USER: dripmetric
+      POSTGRES_PASSWORD: dripmetric
+      POSTGRES_DB: dripmetric_shadow
+    ports:
+      - '54330:5432'
+    # No volume on purpose: a shadow that outlives `docker compose down` would drift
+    # from the primary and the next reconciliation would report differences that are
+    # really just stale rows.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dripmetric -d dripmetric_shadow']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    command:
+      - postgres
+      - '-c'
+      - 'log_min_duration_statement=500'
+
 volumes:
   dripmetric-pgdata:

@@ -157,3 +157,6 @@ export {
   verifyBodyHmac,
 } from './adapters/signatures.js';
 export type { SignatureAlgorithm, SignatureCheck } from './adapters/signatures.js';
+
+export { copyBatchToShadow } from './shadow-writes.js';
+export type { ShadowWriteBatch, ShadowWriteResult } from './shadow-writes.js';

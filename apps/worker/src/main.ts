@@ -1,6 +1,14 @@
-import { closePools, withoutProject } from '@dripmetric/db';
+import {
+  closePools,
+  describeReconciliation,
+  reconcile,
+  shadowConfigured,
+  shadowStats,
+  withoutProject,
+} from '@dripmetric/db';
 import { loadRootEnv } from '@dripmetric/db/admin';
 import {
+  copyBatchToShadow,
   runRetention,
   runTrackingHealth,
   sweepUnclaimedProjects,
@@ -301,6 +309,66 @@ async function main(): Promise<void> {
     }
   });
 
+  /*
+   * The shadow copy (settled decision 1, M13).
+   *
+   * Dual writes go through the QUEUE, and that is the whole reason a dead shadow
+   * cannot slow ingest: the request path writes to the primary, hands over a list of
+   * message hashes and returns. This is the only thing that ever waits on the copy.
+   */
+  if (shadowConfigured()) {
+    await queue.work<{ projectId: number; messageHashes: string[] }>(
+      QUEUES.shadowCopy,
+      async (jobs) => {
+        for (const job of jobs) {
+          const result = await withoutProject(
+            'worker-sweep',
+            (db) =>
+              copyBatchToShadow((sql, params) => db.query<Record<string, unknown>>(sql, params), {
+                projectId: job.data.projectId,
+                messageHashes: job.data.messageHashes,
+              }),
+            { worker: true },
+          );
+          if (result.skippedBecause !== null) {
+            log.warn('shadow copy skipped', {
+              projectId: job.data.projectId,
+              attempted: result.attempted,
+              because: result.skippedBecause,
+            });
+          }
+        }
+      },
+    );
+
+    await queue.work(QUEUES.reconcileShadow, async () => {
+      const result = await reconcile(new Date());
+      const says = describeReconciliation(result);
+      if (result.ran && result.clean) log.info('shadow reconciled', { says });
+      else log.warn('shadow reconciliation', { says, gaps: result.gaps });
+    });
+
+    /*
+     * Daily at 04:23, AFTER retention at 03:17.
+     *
+     * Reconciling before retention has run would compare a primary that has just
+     * deleted old events against a shadow that has not, and report a gap that is
+     * really a delete in flight.
+     */
+    await queue.schedule(QUEUES.reconcileShadow, '23 4 * * *');
+    log.info('shadow copy is on');
+  } else {
+    /*
+     * Said out loud, once, at startup.
+     *
+     * Settled decision 1 gates real founder data on the shadow copy OR Supabase Pro
+     * backups. A worker running without either should not be quiet about it.
+     */
+    log.warn('no shadow copy configured', {
+      note: 'Settled decision 1: no real founder data until the shadow copy or Supabase Pro backups exist.',
+    });
+  }
+
   // Every 5 minutes, and hourly for the collapse test (brief §8.3).
   await queue.schedule(QUEUES.leakSweepFanOut, '*/5 * * * *');
   await queue.schedule(QUEUES.collapseFanOut, '23 * * * *');
@@ -414,6 +482,22 @@ async function reportHealth(queue: Queue): Promise<void> {
     const health = await queue.health();
     const busy = health.queues.filter((q) => q.pending > 0);
     if (busy.length > 0) log.info('queue health', { queues: busy });
+
+    // The shadow's own health, beside the queue's (M13: "shadow reads that log
+    // differences and latency").
+    if (shadowConfigured()) {
+      const shadow = shadowStats();
+      if (shadow.failed > 0 || shadow.timedOut > 0) {
+        log.warn('shadow health', {
+          attempted: shadow.attempted,
+          succeeded: shadow.succeeded,
+          failed: shadow.failed,
+          timedOut: shadow.timedOut,
+          lastError: shadow.lastError,
+          lastLatencyMs: shadow.lastLatencyMs,
+        });
+      }
+    }
   } catch (error) {
     log.error('queue health failed', { err: String(error) });
   }

@@ -353,7 +353,7 @@ source paths, so the same event id sent twice is correctly ignored however it ar
 That is right for a retry, and it means the double-path problem is only visible to the
 same-person-same-second-two-sources check — which is why that check exists.
 
-## M13 · Hardening, shadow copy and load test — `[ ]`
+## M13 · Hardening, shadow copy and load test — `[x]`
 
 **Build:** dual writes to a shadow Postgres through the worker queue; shadow reads that log
 differences and latency; a daily reconciliation job; scripts for the monthly drills; a load
@@ -363,7 +363,35 @@ CI; a runbook, a README, SDK docs and a measured size and cost report.
 **Guard:** in production mode, refuse to create live (non-test) projects unless
 `BACKUPS_CONFIRMED=true`.
 
-- [ ] reconciliation shows zero gaps on a simulator run
-- [ ] killing the shadow does not slow ingest
-- [ ] the load-test report names the ceiling
-- [ ] every drill has a written result in `docs/runbook.md`
+- [x] reconciliation shows zero gaps on a simulator run — a 20-user run through the
+      real API, the worker's copy job, then `reconcile()`: 93 events and their people
+      in both, `missing: 0`. The gate check found a serious bug on the way (below).
+- [x] killing the shadow does not slow ingest — measured, not asserted by inspection.
+      Ingest timed with the shadow live, pointed at a dead port, and absent; the dead
+      case is within margin of the absent case, and `shadowStats().attempted` is **0**,
+      which is the real proof: the request path never opens a shadow connection at
+      all. It queues message hashes and returns.
+- [x] the load-test report names the ceiling — **391 events/second for one project**,
+      p95 540ms, ~33.8M events/day, and it names what stopped it: the per-project
+      **rate limit**, not the pipeline. `docs/load-test.json` holds the ladder.
+- [x] every drill has a written result in `docs/runbook.md` — `reconcile`, `restore`
+      and `kill-shadow` all run and append a dated entry. Appended, never rewritten,
+      because the history is the value.
+
+**The bug the gate check found.** `reconcile()` counted the primary through the request
+pool — the non-owner role, under `FORCE ROW LEVEL SECURITY`, with no project set. It
+counted **zero every time**, so the comparison was 0 against 0 and it reported CLEAN
+against any shadow at all, including an empty one. A check that cannot fail is worse
+than no check: it invites a restore that loses everything while looking like it worked.
+It was invisible until the test ran it against a database with rows in it, because an
+empty primary and an empty shadow genuinely do match.
+
+**Also measured, in `docs/cost.md`:** the SDK core is 5,018 B gzipped against a 5,120 B
+budget (98%, and CI fails over it); storage is 245 B/event with **half of it indexes**;
+a batch is ~38 SQL statements across 5 transactions, so ingest is round-trip bound and
+app-to-database latency is the biggest deployment decision.
+
+**One deliberate scope call:** error reporting is a seam (`reportError` /
+`setErrorReporter`) writing structured JSON, not the Sentry SDK. Attaching Sentry is
+three lines at startup and `docs/publishing.md` has them; this way a deployment with no
+error service still has an error record, and forty files do not import a vendor.

@@ -11,6 +11,15 @@ const EnvSchema = z.object({
    *  LISTEN/NOTIFY and long transactions, which the transaction pooler does not
    *  support (brief section 12). Falls back to DATABASE_URL in dev. */
   WORKER_DATABASE_URL: z.string().optional(),
+  /*
+   * The shadow copy (settled decision 1, M13).
+   *
+   * Absent means no shadow, and that is a supported state rather than an error: the
+   * shadow is a safety net being built towards, not a dependency. Everything that
+   * touches it checks for it first, and `BACKUPS_CONFIRMED` is the other half of the
+   * gate on real founder data.
+   */
+  SHADOW_DATABASE_URL: z.string().optional(),
   /** Envelope-encryption keys: `<keyId>:<base64 32-byte key>`, comma-separated.
    *  The first encrypts; all of them decrypt, so a key rotates without a backfill. */
   ENCRYPTION_KEYS: z.string().min(1),

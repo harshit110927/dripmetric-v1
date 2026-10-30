@@ -16,11 +16,29 @@ import { runMigrations, resetDatabase } from '../migrate.js';
 loadRootEnv();
 
 const reset = process.argv.includes('--reset');
-const url = process.env['ADMIN_DATABASE_URL'] || process.env['DATABASE_URL'];
+
+/*
+ * `--shadow` migrates the shadow copy instead (settled decision 1, M13).
+ *
+ * The SAME migrations, because the shadow's whole purpose is being restorable: a
+ * schema that had drifted from the primary would be a copy you could not switch to,
+ * which is the one thing it must be. So there is no separate migration set and no
+ * way to apply one.
+ */
+const shadow = process.argv.includes('--shadow');
+const url = shadow
+  ? process.env['SHADOW_DATABASE_URL']
+  : process.env['ADMIN_DATABASE_URL'] || process.env['DATABASE_URL'];
+
 if (!url) {
-  console.error('ADMIN_DATABASE_URL is not set. Copy .env.example to .env.');
+  console.error(
+    shadow
+      ? 'SHADOW_DATABASE_URL is not set. `pnpm shadow:up` starts one locally; see docs/runbook.md.'
+      : 'ADMIN_DATABASE_URL is not set. Copy .env.example to .env.',
+  );
   process.exit(1);
 }
+if (shadow) console.log('Migrating the SHADOW copy.');
 
 const client = new pg.Client({ connectionString: url });
 await client.connect();

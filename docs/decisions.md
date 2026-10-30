@@ -1680,3 +1680,85 @@ not become customers and we should not be holding their addresses.
 
 No IP is not a refusal. Behind some proxies there is nothing to read, and refusing
 everyone in that situation would make the product unusable for them.
+
+### 2026-10-29 · The reconciliation reported "clean" against an empty shadow
+
+`reconcile()` counted the primary through `pool()` — the request pool, which connects
+as the non-owner role under FORCE ROW LEVEL SECURITY with no project set. It counted
+zero every time. So the comparison was 0 against 0, and it reported CLEAN against any
+shadow, including a totally empty one.
+
+A check that cannot fail is worse than no check: this one would have invited a restore
+that lost everything while looking like it had verified the copy. It now counts through
+`withoutProject(..., { worker: true })`, which is the sanctioned escape hatch and the
+thing that sets `app_rls_bypassed()`.
+
+It was invisible until a test ran it against a database with rows in it. An empty
+primary and an empty shadow genuinely do match, so the first version passed its own
+command-line run and looked right.
+
+### 2026-10-29 · The shadow pool was memoized without its URL
+
+`shadowDbPool()` cached the pool and ignored a changed `SHADOW_DATABASE_URL`. Harmless
+in production, where it never changes, and wrong everywhere else: a test that repointed
+the shadow at a dead host kept talking to the live one, so "the shadow is unreachable"
+could not be tested at all. Keyed on the URL now, and the old pool is closed in the
+background because nothing should wait on a pool being replaced.
+
+### 2026-10-29 · Ingest queues the shadow copy and never writes it
+
+The exit check is "killing the shadow does not slow ingest", and the only way to keep
+that true under every failure — including a hanging TCP connect, which no
+statement_timeout can help with — is for the request path never to touch the shadow.
+
+So `handleBatch` takes an `enqueueShadowCopy` callback, hands over the message hashes
+of what was actually STORED, and returns. The worker does the copy. `shadowStats()`
+reporting zero attempts from the request path is what the test asserts, because timing
+alone could pass by luck.
+
+The hashes are of stored rows, so a deduped or rejected message is never queued and the
+reconciliation does not report a gap for it. And `shadow-copy` is the one queue with a
+`standard` policy rather than `short`: every other queue recomputes something, so
+collapsing two jobs is free, while a shadow-copy job carries a specific list and
+collapsing it would lose a batch.
+
+### 2026-10-29 · The load test must say what stopped it
+
+The first version printed "200 events/second at concurrency 32" when 2,156 of 2,168
+requests had been rejected by the rate limiter. The arithmetic was right and the
+headline was nonsense: it was describing how fast we can say no.
+
+A level where 429s exceed 20% of requests is now not a measurement, and the report
+names which of three things ended the ramp — a rate limit (a policy you can raise), a
+latency budget (a tuning question), or neither (the test was too small to find the
+edge). The honest answer for one project is 391 events/second, rate-limit bound.
+
+### 2026-10-29 · Error reporting is a seam, not the Sentry SDK
+
+`@sentry/node` is MIT and would be fine to add. `reportError` / `setErrorReporter` is
+deliberately the layer underneath it: one function everything reports through, so
+attaching Sentry is three lines at startup rather than an import in forty files.
+
+The default writes the same structured JSON as every other log line, which means a
+deployment with no error service still has a searchable error record. Nothing in
+`reportError` enriches a report from a request or a row — that is how an end user's
+email ends up in an error tracker — so the caller passes what it wants recorded.
+
+### 2026-10-29 · HSTS is production-only, and the API gets no page CSP
+
+A `Strict-Transport-Security` header on localhost teaches the browser to refuse
+`http://localhost:3000` for two years, and `includeSubDomains` does it to every other
+local project too. It is set only when `NODE_ENV=production`.
+
+`/v1/*` gets `nosniff` but no CSP and no `X-Frame-Options`. It is a machine API called
+cross-origin by design: a CSP written for an HTML document means nothing there, and
+frame options on a JSON response imply a protection they are not providing. `nosniff`
+is the one that matters on an API, because a JSON error body a browser decides to read
+as HTML is how content-type confusion becomes XSS.
+
+### 2026-10-29 · The backups gate accepts exactly "true"
+
+`BACKUPS_CONFIRMED` is a statement that backups exist; it cannot create or verify them.
+So it accepts the literal string `true` and nothing else — not "yes", "1" or "TRUE",
+which are the kinds of thing someone sets in a hurry, and a gate that accepts them is a
+gate that was never really closed. There is a test for each.

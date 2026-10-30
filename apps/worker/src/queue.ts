@@ -192,6 +192,10 @@ export const QUEUES = {
   retentionFanOut: 'retention-fan-out',
   /** Nightly: stop ingesting for unclaimed projects at 14 days, delete at 30 (M11). */
   unclaimedSweep: 'unclaimed-sweep',
+  /** After ingest: copy a batch to the shadow copy (settled decision 1, M13). */
+  shadowCopy: 'shadow-copy',
+  /** Daily: compare the shadow against the primary (M13). */
+  reconcileShadow: 'reconcile-shadow',
 } as const;
 
 /**
@@ -240,4 +244,14 @@ export const QUEUE_POLICIES: Partial<Record<string, QueuePolicy>> = {
   [QUEUES.retention]: 'short',
   [QUEUES.retentionFanOut]: 'short',
   [QUEUES.unclaimedSweep]: 'short',
+  /*
+   * `standard`, not `short` — the one queue where collapsing jobs would lose data.
+   *
+   * Every other queue recomputes something, so two jobs for one project reach the
+   * same answer and dropping one is free. A shadow-copy job carries a specific list
+   * of message hashes, and collapsing two means one batch is never copied, which the
+   * nightly reconciliation would then report as a gap. Correctly.
+   */
+  [QUEUES.shadowCopy]: 'standard',
+  [QUEUES.reconcileShadow]: 'short',
 };

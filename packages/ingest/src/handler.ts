@@ -9,7 +9,7 @@ import { currentProject, entitlements, limitOf, withProject, withoutProject } fr
 import { extractKey, originAllowed, resolveKey, type ResolvedKey } from './auth.js';
 import { IngestError, badRequest, tooLarge, unauthorised, rateLimited } from './errors.js';
 import { consumeTokens } from './rate-limit.js';
-import { prepareMessage } from './validate.js';
+import { prepareMessage, messageHash } from './validate.js';
 import {
   flushBatch,
   newPipelineState,
@@ -46,6 +46,13 @@ export interface HandleBatchOptions {
    * point of the adapters going through this function instead of around it.
    */
   resolvedKey?: ResolvedKey;
+  /**
+   * Hands a batch's stored message hashes to the worker, for the shadow copy (M13).
+   *
+   * Absent means no shadow, which is a supported state: the shadow is a safety net
+   * being built towards, not a dependency.
+   */
+  enqueueShadowCopy?: (projectId: number, messageHashes: string[]) => Promise<void>;
 }
 
 export async function handleBatch(
@@ -196,6 +203,29 @@ async function run(request: IngestRequest, options: HandleBatchOptions): Promise
   // --- Step 9: queue the heavy work, after the transaction commits -------------
   if (options.enqueue && state.followUps.length > 0) {
     await options.enqueue(key.projectId, dedupeFollowUps(state.followUps));
+  }
+
+  /*
+   * The shadow copy is queued, never written here (settled decision 1, M13).
+   *
+   * This is the line that makes "killing the shadow does not slow ingest" true: the
+   * request path hands over a list of message hashes and returns. Nothing in this
+   * function ever opens a connection to the shadow, so the shadow being slow, down
+   * or absent cannot be felt by a founder's SDK.
+   *
+   * The hashes are of what was actually STORED, so a deduped or rejected message is
+   * not queued for copying and the reconciliation does not report a gap for it.
+   */
+  if (options.enqueueShadowCopy) {
+    const stored = settledResults
+      .filter((result) => result.status === 'ok')
+      .map((result) => result.messageId);
+    if (stored.length > 0) {
+      await options.enqueueShadowCopy(
+        key.projectId,
+        stored.map((messageId) => messageHash(messageId)),
+      );
+    }
   }
 
   await touchKey(key.apiKeyId, request.receivedAt);
